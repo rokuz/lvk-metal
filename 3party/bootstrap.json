@@ -17,5 +17,15 @@
         "url": "https://developer.apple.com/metal/cpp/files/metal-cpp_26.zip"
       }
     ]
+  },
+  {
+    "name": "slang",
+    "source": [
+      {
+        "platform": "darwin",
+        "type": "archive",
+        "url": "https://github.com/shader-slang/slang/releases/download/v2026.9.1/slang-2026.9.1-macos-aarch64.zip"
+      }
+    ]
   }
 ]

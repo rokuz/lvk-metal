@@ -8,8 +8,13 @@
 
 #include <lvk/LVK-Metal.h>
 
+#ifdef LVK_METAL_SAMPLE_USE_SLANG
+#include "slang_runtime.h"
+#endif
+
 extern void lvkMetalAttachLayer(CA::MetalLayer* layer, GLFWwindow* window);
 
+#ifndef LVK_METAL_SAMPLE_USE_SLANG
 static const char* kShaderMSL = R"(
 #include <metal_stdlib>
 using namespace metal;
@@ -32,6 +37,7 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]]) {
   return in.color;
 }
 )";
+#endif
 
 int main() {
   if (!glfwInit()) {
@@ -62,8 +68,14 @@ int main() {
     return EXIT_FAILURE;
   }
 
+#ifdef LVK_METAL_SAMPLE_USE_SLANG
+  SlangRuntime slang(LVK_METAL_SAMPLE_SHADERS_DIR);
+  lvk::Holder<lvk::ShaderModuleHandle> vert = slang.createShaderModule(*ctx, "triangle", "vertexMain", lvk::Stage_Vert, "triangle.vert");
+  lvk::Holder<lvk::ShaderModuleHandle> frag = slang.createShaderModule(*ctx, "triangle", "fragmentMain", lvk::Stage_Frag, "triangle.frag");
+#else
   lvk::Holder<lvk::ShaderModuleHandle> vert = ctx->createShaderModule({kShaderMSL, "vertexMain", lvk::Stage_Vert, "triangle.vert"});
   lvk::Holder<lvk::ShaderModuleHandle> frag = ctx->createShaderModule({kShaderMSL, "fragmentMain", lvk::Stage_Frag, "triangle.frag"});
+#endif
 
   lvk::Holder<lvk::RenderPipelineHandle> pipeline = ctx->createRenderPipeline({
       .smVert = vert,

@@ -1,12 +1,8 @@
 # lvk-metal
 
-A thin, bindless-first **Metal 4** graphics wrapper built on
-[`metal-cpp`](https://developer.apple.com/metal/cpp/) and shaped after
-[LightweightVK](https://github.com/corporateshark/lightweightvk) (lvk).
+A thin, bindless-first **Metal 4** graphics wrapper built on [`metal-cpp`](https://developer.apple.com/metal/cpp/) and [LightweightVK](https://github.com/corporateshark/lightweightvk) (lvk).
 
-`lvk-metal` is an **extensible lvk backend**: it reuses lvk's public value types
-so code written against lvk ports over with minimal changes, while exposing the
-Metal-only capabilities through its own `IMetalContext` and `IMetalCommandBuffer` interfaces.
+`lvk-metal` is an **extensible lvk backend**: it reuses lvk's public value types so code written against lvk ports over with minimal changes, while exposing the Metal-only capabilities through its own `IMetalContext` and `IMetalCommandBuffer` interfaces.
 
 Namespace: `lvk::metal`. Public header: `lvk/LVK-Metal.h`.
 
@@ -49,16 +45,14 @@ Run the sample:
 | Option | Default | Description |
 | --- | --- | --- |
 | `LVK_METAL_WITH_SAMPLES` | `ON` | Build the example apps. |
+| `LVK_METAL_WITH_SAMPLES_SLANG` | `OFF` | Author sample shaders in [Slang](https://shader-slang.org/), compiled to MSL at runtime instead of inline MSL. Pulls in the bundled `slang` dependency. |
 | `LVK_METAL_LVK_DIR` | `3party/src/lightweightvk` | Path to the lightweightvk source tree. |
 
-By default the bundled lvk (`LVK_METAL_LVK_DIR == 3party/src/lightweightvk`) is
-configured and built for you. If you point `LVK_METAL_LVK_DIR` at an external
-checkout, `lvk-metal` assumes that project already defines the `LVKLibrary`
+By default the bundled lvk (`LVK_METAL_LVK_DIR == 3party/src/lightweightvk`) is configured and built for you. If you point `LVK_METAL_LVK_DIR` at an external checkout, `lvk-metal` assumes that project already defines the `LVKLibrary`
 target before it is added — the bundled lvk options are not applied in that case.
 
 ## License
 
 [MIT](LICENSE.md) © 2026 Roman Kuznetsov.
 
-Bundled/derived dependencies keep their own licenses (lightweightvk, metal-cpp,
-GLFW, ldrutils).
+Bundled/derived dependencies keep their own licenses (lightweightvk, metal-cpp, GLFW, ldrutils).
