@@ -98,13 +98,24 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   metalLayer_->retain();
   metalLayer_->setDevice(device_.get());
   metalLayer_->setPixelFormat(swapchainFormat_);
-  metalLayer_->setFramebufferOnly(true);
+  metalLayer_->setFramebufferOnly(!cfg.headless);
   metalLayer_->setDrawableSize(CGSizeMake(width_, height_));
   metalLayer_->setDisplaySyncEnabled(vsync_);
   metalLayer_->setMaximumDrawableCount(framesInFlight_);
 
   if (!createQueue())
     return false;
+
+  NS::SharedPtr<MTL::ResidencySetDescriptor> rsd = ns::make<MTL::ResidencySetDescriptor>();
+  ns::setLabel(rsd.get(), "lvk-metal.residency");
+  NS::Error* rsError = nullptr;
+  residencySet_ = NS::TransferPtr(device_->newResidencySet(rsd.get(), &rsError));
+  if (!LVK_VERIFY(residencySet_)) {
+    LLOGE("failed to create residency set: %s", rsError ? rsError->localizedDescription()->utf8String() : "unknown");
+    return false;
+  }
+  commandQueue_->addResidencySet(residencySet_.get());
+
   immediate_ = std::make_unique<MetalImmediateCommands>(device_.get(), commandQueue_.get(), "lvk-metal.immediate");
   if (!createBindlessHeaps())
     return false;
@@ -176,7 +187,26 @@ bool MetalContext::createBindlessHeaps() {
   if (!LVK_VERIFY(constantsRing_))
     return false;
   ns::setLabel(constantsRing_.get(), "lvk-metal.pushconstants.ring");
+
+  addResident(bufferHeap_.get());
+  addResident(textureHeap_.get());
+  addResident(samplerHeap_.get());
+  addResident(constantsRing_.get());
   return true;
+}
+
+void MetalContext::addResident(const MTL::Allocation* allocation) {
+  if (residencySet_ && allocation) {
+    residencySet_->addAllocation(allocation);
+    residencyDirty_ = true;
+  }
+}
+
+void MetalContext::removeResident(const MTL::Allocation* allocation) {
+  if (residencySet_ && allocation) {
+    residencySet_->removeAllocation(allocation);
+    residencyDirty_ = true;
+  }
 }
 
 void MetalContext::rebindArgumentTableHeaps() {
@@ -217,8 +247,10 @@ void MetalContext::ensureTextureCapacity(uint32_t index) {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), textureHeap_->contents(), NS::UInteger(texturesCapacity_) * sizeof(MTL::ResourceID));
   ns::setLabel(nb.get(), "lvk-metal.bindless.textures");
+  removeResident(textureHeap_.get());
   textureHeap_ = nb;
   texturesCapacity_ = newCap;
+  addResident(textureHeap_.get());
   rebindArgumentTableHeaps();
 }
 
@@ -236,8 +268,10 @@ void MetalContext::ensureSamplerCapacity(uint32_t index) {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), samplerHeap_->contents(), NS::UInteger(samplersCapacity_) * sizeof(MTL::ResourceID));
   ns::setLabel(nb.get(), "lvk-metal.bindless.samplers");
+  removeResident(samplerHeap_.get());
   samplerHeap_ = nb;
   samplersCapacity_ = newCap;
+  addResident(samplerHeap_.get());
   rebindArgumentTableHeaps();
 }
 
@@ -261,8 +295,10 @@ void MetalContext::ensureBufferCapacity(uint32_t index) {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::GPUAddress), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), bufferHeap_->contents(), NS::UInteger(buffersCapacity_) * sizeof(MTL::GPUAddress));
   ns::setLabel(nb.get(), "lvk-metal.bindless.buffers");
+  removeResident(bufferHeap_.get());
   bufferHeap_ = nb;
   buffersCapacity_ = newCap;
+  addResident(bufferHeap_.get());
   rebindArgumentTableHeaps();
 }
 
@@ -274,6 +310,7 @@ void MetalContext::growConstantsRing() {
   ns::setLabel(nb.get(), "lvk-metal.pushconstants.ring");
   retiredConstantRings_.push_back({constantsRing_, currentWrapper_->handle});
   constantsRing_ = nb;
+  addResident(constantsRing_.get());
   pushesPerFrameCapacity_ = newPerFrame;
   constantsFrameRegionBytes_ = newRegionBytes;
   constantsCursor_ = currentWrapper_->bufferIndex * newRegionBytes;
@@ -283,11 +320,17 @@ IMetalCommandBuffer& MetalContext::acquireMetalCommandBuffer(bool) {
   LVK_ASSERT_MSG(!framePool_, "previous command buffer was not submitted");
   for (size_t i = 0; i < retiredConstantRings_.size();) {
     if (immediate_->isReady(retiredConstantRings_[i].handle)) {
+      removeResident(retiredConstantRings_[i].buffer.get());
       retiredConstantRings_[i] = retiredConstantRings_.back();
       retiredConstantRings_.pop_back();
     } else {
       ++i;
     }
+  }
+  if (residencyDirty_) {
+    residencySet_->commit();
+    residencySet_->requestResidency();
+    residencyDirty_ = false;
   }
   framePool_ = NS::AutoreleasePool::alloc()->init();
   currentWrapper_ = &immediate_->acquire();
@@ -329,6 +372,7 @@ Holder<BufferHandle> MetalContext::createBuffer(const BufferDesc& desc, const ch
     return {};
   }
   ns::setLabel(buffer.get(), debugName ? debugName : desc.debugName);
+  addResident(buffer.get());
   if (desc.data && buffer->contents())
     std::memcpy(buffer->contents(), desc.data, desc.size);
 
@@ -361,6 +405,7 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
     return {};
   }
   ns::setLabel(texture.get(), debugName ? debugName : desc.debugName);
+  addResident(texture.get());
 
   const MTL::ResourceID rid = texture->gpuResourceID();
   MetalImage img;
@@ -403,12 +448,49 @@ Holder<SamplerHandle> MetalContext::createSampler(const SamplerStateDesc& desc, 
   return {this, handle};
 }
 
+static const char* kBindlessPreamble = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+#ifndef LVK_BINDLESS_TEXTURES
+#define LVK_BINDLESS_TEXTURES 16384
+#endif
+#ifndef LVK_BINDLESS_SAMPLERS
+#define LVK_BINDLESS_SAMPLERS 1024
+#endif
+
+struct lvkTextures2D   { array<texture2d<float>,   LVK_BINDLESS_TEXTURES> data; };
+struct lvkTextures3D   { array<texture3d<float>,   LVK_BINDLESS_TEXTURES> data; };
+struct lvkTexturesCube { array<texturecube<float>, LVK_BINDLESS_TEXTURES> data; };
+struct lvkSamplers     { array<sampler,            LVK_BINDLESS_SAMPLERS> data; };
+
+#define LVK_BINDLESS_ARGS \
+  device const lvkTextures2D&   kTextures2D   [[buffer(2)]], \
+  device const lvkTextures3D&   kTextures3D   [[buffer(3)]], \
+  device const lvkTexturesCube& kTexturesCube [[buffer(4)]], \
+  constant lvkSamplers&         kSamplers     [[buffer(5)]]
+
+#define textureBindless2D(tid, sid, uv)            kTextures2D.data[tid].sample(kSamplers.data[sid], (uv))
+#define textureBindless2DLod(tid, sid, uv, lod)    kTextures2D.data[tid].sample(kSamplers.data[sid], (uv), level(lod))
+#define textureBindless3D(tid, sid, uvw)           kTextures3D.data[tid].sample(kSamplers.data[sid], (uvw))
+#define textureBindlessCube(tid, sid, dir)         kTexturesCube.data[tid].sample(kSamplers.data[sid], (dir))
+#define textureBindlessCubeLod(tid, sid, dir, lod) kTexturesCube.data[tid].sample(kSamplers.data[sid], (dir), level(lod))
+#define textureBindlessSize2D(tid)                 uint2(kTextures2D.data[tid].get_width(), kTextures2D.data[tid].get_height())
+)";
+
 Holder<ShaderModuleHandle> MetalContext::createShaderModule(const ShaderModuleDesc& desc, Result* outResult) {
   NS::SharedPtr<MTL::Library> library;
   NS::Error* error = nullptr;
 
   if (desc.data && desc.dataSize == 0) {
-    library = NS::TransferPtr(device_->newLibrary(ns::string(desc.data), nullptr, &error));
+    std::string source;
+    if (std::strstr(desc.data, "LVK_BINDLESS")) {
+      source += "#define LVK_BINDLESS_TEXTURES " + std::to_string(texturesCapacity_) + "\n";
+      source += "#define LVK_BINDLESS_SAMPLERS " + std::to_string(samplersCapacity_) + "\n";
+      source += kBindlessPreamble;
+    }
+    source += desc.data;
+    library = NS::TransferPtr(device_->newLibrary(ns::string(source.c_str()), nullptr, &error));
   } else if (desc.data && desc.dataSize) {
     dispatch_data_t dd = dispatch_data_create(desc.data, desc.dataSize, nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
     library = NS::TransferPtr(device_->newLibrary(dd, &error));
@@ -534,9 +616,13 @@ void MetalContext::destroy(SamplerHandle handle) {
   samplers_.destroy(handle);
 }
 void MetalContext::destroy(BufferHandle handle) {
+  if (const MetalBuffer* mb = buffers_.get(handle))
+    removeResident(mb->buffer.get());
   buffers_.destroy(handle);
 }
 void MetalContext::destroy(TextureHandle handle) {
+  if (const MetalImage* img = textures_.get(handle))
+    removeResident(img->texture.get());
   textures_.destroy(handle);
 }
 void MetalContext::destroy(ArgumentTableHandle handle) {
@@ -567,6 +653,57 @@ uint8_t* MetalContext::getMappedPtr(BufferHandle handle) const {
 uint64_t MetalContext::gpuAddress(BufferHandle handle, size_t offset) const {
   const MetalBuffer* mb = buffers_.get(handle);
   return mb && mb->buffer ? mb->buffer->gpuAddress() + offset : 0;
+}
+
+Result MetalContext::download(TextureHandle handle, const TextureRangeDesc& range, void* outData) {
+  const MetalImage* img = textures_.get(handle);
+  if (!img || !img->texture)
+    return Result(Result::Code::ArgumentOutOfRange, "invalid texture");
+  const uint32_t w = range.dimensions.width;
+  const uint32_t h = range.dimensions.height;
+
+  MTL::Texture* src = img->texture.get();
+  if (src->storageMode() == MTL::StorageModeShared) {
+    const MTL::Region region(uint32_t(range.offset.x), uint32_t(range.offset.y), w, h);
+    src->getBytes(outData, NS::UInteger(w) * 4, region, range.mipLevel);
+    return Result();
+  }
+
+  const NS::UInteger bytesPerRow = NS::UInteger(w) * 4;
+  const NS::UInteger bytesPerImage = bytesPerRow * h;
+  NS::SharedPtr<MTL::Buffer> staging = NS::TransferPtr(device_->newBuffer(bytesPerImage, MTL::ResourceStorageModeShared));
+  if (!staging)
+    return Result(Result::Code::RuntimeError, "download staging buffer alloc failed");
+
+  const bool manageSrcResidency = img->isSwapchainImage;
+  residencySet_->addAllocation(staging.get());
+  if (manageSrcResidency)
+    residencySet_->addAllocation(src);
+  residencySet_->commit();
+  residencySet_->requestResidency();
+
+  const MetalImmediateCommands::CommandBufferWrapper& wrapper = immediate_->acquire();
+  MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
+  enc->copyFromTexture(src,
+                       range.layer,
+                       range.mipLevel,
+                       MTL::Origin(uint32_t(range.offset.x), uint32_t(range.offset.y), 0),
+                       MTL::Size(w, h, 1),
+                       staging.get(),
+                       0,
+                       bytesPerRow,
+                       bytesPerImage);
+  enc->endEncoding();
+  const SubmitHandle sh = immediate_->submit(wrapper);
+  immediate_->wait(sh);
+
+  residencySet_->removeAllocation(staging.get());
+  if (manageSrcResidency)
+    residencySet_->removeAllocation(src);
+  residencySet_->commit();
+
+  std::memcpy(outData, staging->contents(), bytesPerImage);
+  return Result();
 }
 
 Dimensions MetalContext::getDimensions(TextureHandle handle) const {
@@ -634,7 +771,7 @@ void MetalContext::recreateSwapchain(int newWidth, int newHeight) {
     metalLayer_->setDrawableSize(CGSizeMake(newWidth, newHeight));
 }
 
-void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const lvk::Framebuffer& framebuffer, const lvk::Dependencies&) {
+void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const lvk::Framebuffer& framebuffer, const lvk::Dependencies& deps) {
   NS::SharedPtr<MTL4::RenderPassDescriptor> rpd = ns::make<MTL4::RenderPassDescriptor>();
 
   uint32_t rtWidth = 0;
@@ -645,6 +782,8 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const l
     LVK_ASSERT(img && img->texture);
     MTL::RenderPassColorAttachmentDescriptor* att = rpd->colorAttachments()->object(i);
     att->setTexture(img->texture.get());
+    att->setSlice(renderPass.color[i].layer);
+    att->setLevel(renderPass.color[i].level);
     att->setLoadAction(toLoadAction(renderPass.color[i].loadOp));
     att->setStoreAction(toStoreAction(renderPass.color[i].storeOp));
     const float* c = renderPass.color[i].clearColor.float32;
@@ -658,6 +797,8 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const l
     LVK_ASSERT(img && img->texture);
     MTL::RenderPassDepthAttachmentDescriptor* att = rpd->depthAttachment();
     att->setTexture(img->texture.get());
+    att->setSlice(renderPass.depth.layer);
+    att->setLevel(renderPass.depth.level);
     att->setLoadAction(toLoadAction(renderPass.depth.loadOp));
     att->setStoreAction(toStoreAction(renderPass.depth.storeOp));
     att->setClearDepth(renderPass.depth.clearDepth);
@@ -669,6 +810,22 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const l
   rpd->setRenderTargetHeight(rtHeight);
 
   encoder_ = ctx_->commandBuffer()->renderCommandEncoder(rpd.get());
+
+  const MTL::Stages shaderReadStages = MTL::StageVertex | MTL::StageFragment;
+  if (!deps.sampledImages.empty()) {
+    encoder_->barrierAfterQueueStages(
+        MTL::StageFragment | MTL::StageBlit | MTL::StageDispatch, shaderReadStages, MTL4::VisibilityOptionDevice);
+  }
+  if (!deps.storageImages.empty()) {
+    encoder_->barrierAfterQueueStages(MTL::StageFragment | MTL::StageDispatch, shaderReadStages, MTL4::VisibilityOptionDevice);
+  }
+  if (!deps.buffers.empty()) {
+    encoder_->barrierAfterQueueStages(MTL::StageDispatch | MTL::StageBlit, shaderReadStages, MTL4::VisibilityOptionDevice);
+  }
+  if (!deps.inputAttachments.empty()) {
+    encoder_->barrierAfterQueueStages(MTL::StageFragment, MTL::StageFragment, MTL4::VisibilityOptionDevice);
+  }
+
   isRendering_ = true;
   argTableOverridden_ = false;
   bindArgumentTableInternal(ctx_->defaultArgumentTable());

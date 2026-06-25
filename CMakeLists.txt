@@ -43,6 +43,13 @@ endif()
 
 add_subdirectory(lvk)
 
+function(lvk_metal_target_add_common target)
+  target_sources(${target} PRIVATE "${LVK_METAL_ROOT}/samples/common/app_common.cpp")
+  target_include_directories(${target} PRIVATE
+    "${LVK_METAL_ROOT}/samples/common"
+    "${LVK_METAL_LVK_DIR}/third-party/deps/src/stb")
+endfunction()
+
 function(lvk_metal_target_use_slang target shaders_dir)
   if(NOT LVK_METAL_WITH_SAMPLES_SLANG)
     return()
@@ -57,10 +64,12 @@ function(lvk_metal_target_use_slang target shaders_dir)
   target_link_libraries(${target} PRIVATE "${LVK_METAL_SLANG_LIB}")
   target_compile_definitions(${target} PRIVATE
     LVK_METAL_SAMPLE_USE_SLANG=1
-    "LVK_METAL_SAMPLE_SHADERS_DIR=\"${shaders_dir}\"")
+    "LVK_METAL_SAMPLE_SHADERS_DIR=\"${shaders_dir}\""
+    "LVK_METAL_SAMPLE_COMMON_DIR=\"${LVK_METAL_ROOT}/samples/common\"")
   set_target_properties(${target} PROPERTIES BUILD_RPATH "${_slang_dir}/lib")
 endfunction()
 
-if(LVK_METAL_WITH_SAMPLES AND EXISTS "${LVK_METAL_ROOT}/samples/HelloTriangle/CMakeLists.txt")
+if(LVK_METAL_WITH_SAMPLES)
   add_subdirectory(samples/HelloTriangle)
+  add_subdirectory(samples/RenderToCubeMap)
 endif()

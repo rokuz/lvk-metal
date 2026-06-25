@@ -3,6 +3,8 @@
 #include <slang-com-ptr.h>
 #include <slang.h>
 
+#include <vector>
+
 struct SlangRuntime::Impl {
   std::string moduleDir;
   Slang::ComPtr<slang::IGlobalSession> globalSession;
@@ -29,13 +31,18 @@ SlangRuntime::SlangRuntime(std::filesystem::path moduleDir) noexcept {
   target.structureSize = sizeof(slang::TargetDesc);
   target.format = SLANG_METAL;
 
-  char const* searchPaths[] = {impl->moduleDir.c_str()};
+  std::vector<char const*> searchPaths;
+  searchPaths.push_back(impl->moduleDir.c_str());
+#ifdef LVK_METAL_SAMPLE_COMMON_DIR
+  searchPaths.push_back(LVK_METAL_SAMPLE_COMMON_DIR);
+#endif
+
   slang::SessionDesc sd = {};
   sd.structureSize = sizeof(slang::SessionDesc);
   sd.targets = &target;
   sd.targetCount = 1;
-  sd.searchPaths = searchPaths;
-  sd.searchPathCount = 1;
+  sd.searchPaths = searchPaths.data();
+  sd.searchPathCount = SlangInt(searchPaths.size());
 
   if (SLANG_FAILED(impl->globalSession->createSession(sd, impl->session.writeRef())) || !impl->session) {
     LLOGE("Slang: failed to create session");

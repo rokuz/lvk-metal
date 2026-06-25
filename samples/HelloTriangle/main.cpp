@@ -1,20 +1,14 @@
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
-#include <memory>
-
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 
 #include <lvk/LVK-Metal.h>
+
+#include "app_common.h"
 
 #ifdef LVK_METAL_SAMPLE_USE_SLANG
 #include "slang_runtime.h"
 #endif
 
-extern void lvkMetalAttachLayer(CA::MetalLayer* layer, GLFWwindow* window);
-
-#ifndef LVK_METAL_SAMPLE_USE_SLANG
 static const char* kShaderMSL = R"(
 #include <metal_stdlib>
 using namespace metal;
@@ -37,81 +31,57 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]]) {
   return in.color;
 }
 )";
-#endif
 
-int main() {
-  if (!glfwInit()) {
-    fprintf(stderr, "glfwInit failed\n");
-    return EXIT_FAILURE;
-  }
-  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+class HelloTriangle final : public lvk::metal::ISample {
+ public:
+  void init(lvk::metal::IMetalContext& ctx, uint32_t width, uint32_t height) override {
+    width_ = width;
+    height_ = height;
 
-  GLFWwindow* window = glfwCreateWindow(1024, 768, "[lvk-metal] HelloTriangle", nullptr, nullptr);
-  if (!window) {
-    glfwTerminate();
-    return EXIT_FAILURE;
-  }
-
-  int fbWidth = 0;
-  int fbHeight = 0;
-  glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
-
-  CA::MetalLayer* layer = CA::MetalLayer::layer();
-  lvkMetalAttachLayer(layer, window);
-
-  std::unique_ptr<lvk::metal::IMetalContext> ctx =
-      lvk::metal::createContextWithMetalLayer(layer, uint32_t(fbWidth), uint32_t(fbHeight), {.vsync = true});
-  if (!ctx) {
-    fprintf(stderr, "createContextWithMetalLayer failed\n");
-    glfwDestroyWindow(window);
-    glfwTerminate();
-    return EXIT_FAILURE;
-  }
+    lvk::Holder<lvk::ShaderModuleHandle> vert;
+    lvk::Holder<lvk::ShaderModuleHandle> frag;
 
 #ifdef LVK_METAL_SAMPLE_USE_SLANG
-  SlangRuntime slang(LVK_METAL_SAMPLE_SHADERS_DIR);
-  lvk::Holder<lvk::ShaderModuleHandle> vert = slang.createShaderModule(*ctx, "triangle", "vertexMain", lvk::Stage_Vert, "triangle.vert");
-  lvk::Holder<lvk::ShaderModuleHandle> frag = slang.createShaderModule(*ctx, "triangle", "fragmentMain", lvk::Stage_Frag, "triangle.frag");
-#else
-  lvk::Holder<lvk::ShaderModuleHandle> vert = ctx->createShaderModule({kShaderMSL, "vertexMain", lvk::Stage_Vert, "triangle.vert"});
-  lvk::Holder<lvk::ShaderModuleHandle> frag = ctx->createShaderModule({kShaderMSL, "fragmentMain", lvk::Stage_Frag, "triangle.frag"});
+    const char* useSlang = getenv("LVK_METAL_USE_SLANG");
+    if (useSlang && useSlang[0] && useSlang[0] != '0') {
+      LLOGL("[lvk-metal] shaders: Slang -> MSL");
+      SlangRuntime slang(LVK_METAL_SAMPLE_SHADERS_DIR);
+      vert = slang.createShaderModule(ctx, "triangle", "vertexMain", lvk::Stage_Vert, "triangle.vert");
+      frag = slang.createShaderModule(ctx, "triangle", "fragmentMain", lvk::Stage_Frag, "triangle.frag");
+    } else
 #endif
+    {
+      LLOGL("[lvk-metal] shaders: native MSL");
+      vert = ctx.createShaderModule({kShaderMSL, "vertexMain", lvk::Stage_Vert, "triangle.vert"});
+      frag = ctx.createShaderModule({kShaderMSL, "fragmentMain", lvk::Stage_Frag, "triangle.frag"});
+    }
 
-  lvk::Holder<lvk::RenderPipelineHandle> pipeline = ctx->createRenderPipeline({
-      .smVert = vert,
-      .smFrag = frag,
-      .color = {{.format = lvk::Format_BGRA_UN8}},
-      .debugName = "triangle",
-  });
-
-  while (!glfwWindowShouldClose(window)) {
-    glfwPollEvents();
-
-    lvk::ICommandBuffer& cmd = ctx->acquireCommandBuffer();
-    const lvk::TextureHandle swapchain = ctx->getCurrentSwapchainTexture();
-
-    const lvk::RenderPass renderPass = {
-        .color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {.float32 = {0.15f, 0.18f, 0.22f, 1.0f}}}},
-    };
-    const lvk::Framebuffer framebuffer = {
-        .color = {{.texture = swapchain}},
-    };
-
-    cmd.cmdBeginRendering(renderPass, framebuffer);
-    cmd.cmdBindViewport({.width = float(fbWidth), .height = float(fbHeight)});
-    cmd.cmdBindRenderPipeline(pipeline);
-    cmd.cmdDraw(3);
-    cmd.cmdEndRendering();
-
-    ctx->submit(cmd, swapchain);
+    pipeline_ = ctx.createRenderPipeline({
+        .smVert = vert,
+        .smFrag = frag,
+        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .debugName = "triangle",
+    });
   }
 
-  pipeline.reset();
-  vert.reset();
-  frag.reset();
-  ctx.reset();
+  void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float) override {
+    cmd.cmdBeginRendering(
+        {.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {.float32 = {0.15f, 0.18f, 0.22f, 1.0f}}}}},
+        {.color = {{.texture = target}}});
+    cmd.cmdBindViewport({.width = float(width_), .height = float(height_)});
+    cmd.cmdBindRenderPipeline(pipeline_);
+    cmd.cmdDraw(3);
+    cmd.cmdEndRendering();
+  }
 
-  glfwDestroyWindow(window);
-  glfwTerminate();
-  return 0;
-}
+  void destroy() override {
+    pipeline_.reset();
+  }
+
+ private:
+  lvk::Holder<lvk::RenderPipelineHandle> pipeline_;
+  uint32_t width_ = 0;
+  uint32_t height_ = 0;
+};
+
+DESKTOP_MAIN(HelloTriangle)

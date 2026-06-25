@@ -33,6 +33,7 @@ struct ContextConfig {
   MTL::PixelFormat swapchainFormat = MTL::PixelFormatBGRA8Unorm;
   bool vsync = false;
   bool gammaCorrection = false;
+  bool headless = false;
   uint32_t initialTexturesPoolSize = 16384;
   uint32_t initialSamplesPoolSize = 1024;
   uint32_t initialPushConstantsPerFrameCount = 256;

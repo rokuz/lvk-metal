@@ -6,6 +6,10 @@
       "url": "https://github.com/rokuz/lightweightvk.git",
       "revision": "origin/main",
       "recursive": false
+    },
+    "postprocess": {
+      "type": "script",
+      "file": "lvk_post_deploy.py"
     }
   },
   {

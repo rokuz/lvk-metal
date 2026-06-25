@@ -4,4 +4,5 @@ target_compile_features(HelloTriangle PRIVATE cxx_std_20)
 
 target_link_libraries(HelloTriangle PRIVATE lvk-metal LVKLibrary glfw)
 
+lvk_metal_target_add_common(HelloTriangle)
 lvk_metal_target_use_slang(HelloTriangle "${CMAKE_CURRENT_SOURCE_DIR}")

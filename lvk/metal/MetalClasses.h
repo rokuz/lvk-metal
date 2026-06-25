@@ -226,9 +226,7 @@ class MetalContext final : public IMetalContext {
   Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override {
     return Result(Result::Code::RuntimeError, "texture upload not implemented");
   }
-  Result download(TextureHandle handle, const TextureRangeDesc& range, void* outData) override {
-    return Result(Result::Code::RuntimeError, "texture download not implemented");
-  }
+  Result download(TextureHandle handle, const TextureRangeDesc& range, void* outData) override;
   Dimensions getDimensions(TextureHandle handle) const override;
   float getAspectRatio(TextureHandle handle) const override;
   Format getFormat(TextureHandle handle) const override;
@@ -301,9 +299,13 @@ class MetalContext final : public IMetalContext {
   void ensureBufferCapacity(uint32_t index);
   void rebindArgumentTableHeaps();
   void growConstantsRing();
+  void addResident(const MTL::Allocation* allocation);
+  void removeResident(const MTL::Allocation* allocation);
 
   NS::SharedPtr<MTL::Device> device_;
   NS::SharedPtr<MTL4::CommandQueue> commandQueue_;
+  NS::SharedPtr<MTL::ResidencySet> residencySet_;
+  bool residencyDirty_ = false;
   std::unique_ptr<MetalImmediateCommands> immediate_;
   const MetalImmediateCommands::CommandBufferWrapper* currentWrapper_ = nullptr;
 
