@@ -1,0 +1,21 @@
+[
+  {
+    "name": "lightweightvk",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/rokuz/lightweightvk.git",
+      "revision": "origin/main",
+      "recursive": false
+    }
+  },
+  {
+    "name": "metal-cpp",
+    "source": [
+      {
+        "platform": "darwin",
+        "type": "archive",
+        "url": "https://developer.apple.com/metal/cpp/files/metal-cpp_26.zip"
+      }
+    ]
+  }
+]
