@@ -34,6 +34,7 @@ struct ContextConfig {
   bool vsync = false;
   bool gammaCorrection = false;
   bool headless = false;
+  bool validation = false;
   uint32_t initialTexturesPoolSize = 16384;
   uint32_t initialSamplesPoolSize = 1024;
   uint32_t initialPushConstantsPerFrameCount = 256;
@@ -59,6 +60,7 @@ struct ArgumentTableDesc {
 class IMetalCommandBuffer : public lvk::ICommandBuffer {
  public:
   virtual void cmdBindArgumentTable(ArgumentTableHandle handle) = 0;
+  virtual void cmdBarrierAfterTransfer() = 0;
 };
 
 class IMetalContext : public lvk::IContext {
@@ -73,6 +75,9 @@ class IMetalContext : public lvk::IContext {
 
   [[nodiscard]] virtual Holder<ArgumentTableHandle> createArgumentTable(const ArgumentTableDesc& desc, Result* outResult = nullptr) = 0;
   virtual void destroy(ArgumentTableHandle handle) = 0;
+
+  virtual bool startGpuCapture(const char* outputPath) = 0;
+  virtual void stopGpuCapture() = 0;
 };
 
 std::unique_ptr<IMetalContext> createContextWithMetalLayer(CA::MetalLayer* layer,

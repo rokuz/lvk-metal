@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(lvk-metal CXX)
+project(lvk-metal CXX C)
 
 if(NOT APPLE)
   message(FATAL_ERROR "lvk-metal targets Apple platforms with Metal 4 only")
@@ -72,4 +72,7 @@ endfunction()
 if(LVK_METAL_WITH_SAMPLES)
   add_subdirectory(samples/HelloTriangle)
   add_subdirectory(samples/RenderToCubeMap)
+  add_subdirectory(samples/RenderToCubeMapSinglePass)
+  add_subdirectory(samples/SolarSystem)
+  add_subdirectory(samples/ImGuiDemo)
 endif()

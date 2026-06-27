@@ -9,6 +9,7 @@
 #include "lvk/LVK-Metal.h"
 #include "lvk/metal/Common.h"
 #include "lvk/metal/MetalImmediateCommands.h"
+#include "lvk/metal/MetalLimits.h"
 
 namespace lvk::metal {
 
@@ -50,8 +51,9 @@ struct MetalArgumentTable {
 };
 
 class MetalContext;
+class MetalStagingDevice;
 
-class CommandBuffer final : public IMetalCommandBuffer {
+class CommandBuffer : public IMetalCommandBuffer {
  public:
   CommandBuffer() = default;
   explicit CommandBuffer(MetalContext* ctx) : ctx_(ctx) {}
@@ -138,6 +140,12 @@ class CommandBuffer final : public IMetalCommandBuffer {
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override {}
 
   void cmdBindArgumentTable(ArgumentTableHandle handle) override;
+  void cmdBarrierAfterTransfer() override;
+
+ protected:
+  MetalContext* context() const {
+    return ctx_;
+  }
 
  private:
   void bindArgumentTableInternal(ArgumentTableHandle handle);
@@ -154,10 +162,19 @@ class CommandBuffer final : public IMetalCommandBuffer {
   uint64_t boundIndexOffset_ = 0;
 };
 
-class MetalContext final : public IMetalContext {
+class MetalContext : public IMetalContext {
  public:
   MetalContext() = default;
   ~MetalContext() override;
+
+  friend class MetalStagingDevice;
+
+  uint32_t pushConstantsSize() const {
+    return pushConstantsSize_;
+  }
+  const GpuLimits& limits() const {
+    return limits_;
+  }
 
   [[nodiscard]] bool initialize(CA::MetalLayer* layer, uint32_t width, uint32_t height, const ContextConfig& cfg);
 
@@ -195,6 +212,9 @@ class MetalContext final : public IMetalContext {
   }
   Holder<ArgumentTableHandle> createArgumentTable(const ArgumentTableDesc& desc, Result* outResult = nullptr) override;
 
+  bool startGpuCapture(const char* outputPath) override;
+  void stopGpuCapture() override;
+
   void destroy(ComputePipelineHandle handle) override {}
   void destroy(RenderPipelineHandle handle) override;
   void destroy(RayTracingPipelineHandle handle) override {}
@@ -223,9 +243,7 @@ class MetalContext final : public IMetalContext {
     return UINT32_MAX;
   }
 
-  Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override {
-    return Result(Result::Code::RuntimeError, "texture upload not implemented");
-  }
+  Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override;
   Result download(TextureHandle handle, const TextureRangeDesc& range, void* outData) override;
   Dimensions getDimensions(TextureHandle handle) const override;
   float getAspectRatio(TextureHandle handle) const override;
@@ -301,12 +319,14 @@ class MetalContext final : public IMetalContext {
   void growConstantsRing();
   void addResident(const MTL::Allocation* allocation);
   void removeResident(const MTL::Allocation* allocation);
+  void flushResidency();
 
   NS::SharedPtr<MTL::Device> device_;
   NS::SharedPtr<MTL4::CommandQueue> commandQueue_;
   NS::SharedPtr<MTL::ResidencySet> residencySet_;
   bool residencyDirty_ = false;
   std::unique_ptr<MetalImmediateCommands> immediate_;
+  std::unique_ptr<MetalStagingDevice> staging_;
   const MetalImmediateCommands::CommandBufferWrapper* currentWrapper_ = nullptr;
 
   CA::MetalLayer* metalLayer_ = nullptr;
@@ -329,6 +349,7 @@ class MetalContext final : public IMetalContext {
   uint32_t buffersCapacityMax_ = 0;
   uint32_t texturesCapacityMax_ = 0;
   uint32_t samplersCapacityMax_ = 0;
+  GpuLimits limits_;
 
   NS::SharedPtr<MTL::Buffer> constantsRing_;
   uint32_t pushConstantsSize_ = 128;
@@ -352,6 +373,25 @@ class MetalContext final : public IMetalContext {
   TextureHandle swapchainTextureHandle_;
   ArgumentTableHandle defaultArgumentTable_;
   CommandBuffer cmdBuffer_;
+};
+
+class MetalValidatedCommandBuffer final : public CommandBuffer {
+ public:
+  using CommandBuffer::CommandBuffer;
+
+  void cmdPushConstants(const void* data, size_t size, size_t offset = 0) override;
+  void cmdBeginRendering(const lvk::RenderPass& renderPass, const lvk::Framebuffer& desc, const Dependencies& deps = {}) override;
+};
+
+class MetalValidatedContext final : public MetalContext {
+ public:
+  IMetalCommandBuffer& acquireMetalCommandBuffer(bool dedicatedCompute = false) override;
+
+  Holder<TextureHandle> createTexture(const TextureDesc& desc, const char* debugName = nullptr, Result* outResult = nullptr) override;
+  Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
+
+ private:
+  MetalValidatedCommandBuffer validatedCmdBuffer_{this};
 };
 
 } // namespace lvk::metal

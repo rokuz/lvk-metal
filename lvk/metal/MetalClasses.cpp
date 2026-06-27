@@ -4,6 +4,7 @@
 
 #include "lvk/metal/MetalClasses.h"
 #include "lvk/metal/MetalLimits.h"
+#include "lvk/metal/MetalStagingDevice.h"
 #include "lvk/metal/MetalMappings.h"
 
 #include <cstring>
@@ -75,7 +76,8 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   if (!createDevice())
     return false;
 
-  const GpuLimits limits = limitsForFamily(detectGpuFamily(device_.get()));
+  limits_ = limitsForFamily(detectGpuFamily(device_.get()));
+  const GpuLimits& limits = limits_;
   texturesCapacityMax_ = limits.maxTexturesInArgumentBuffer;
   buffersCapacityMax_ = limits.maxBuffersInArgumentBuffer;
   samplersCapacityMax_ = limits.maxSamplersInArgumentBuffer;
@@ -117,6 +119,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   commandQueue_->addResidencySet(residencySet_.get());
 
   immediate_ = std::make_unique<MetalImmediateCommands>(device_.get(), commandQueue_.get(), "lvk-metal.immediate");
+  staging_ = std::make_unique<MetalStagingDevice>(*this);
   if (!createBindlessHeaps())
     return false;
 
@@ -206,6 +209,14 @@ void MetalContext::removeResident(const MTL::Allocation* allocation) {
   if (residencySet_ && allocation) {
     residencySet_->removeAllocation(allocation);
     residencyDirty_ = true;
+  }
+}
+
+void MetalContext::flushResidency() {
+  if (residencyDirty_) {
+    residencySet_->commit();
+    residencySet_->requestResidency();
+    residencyDirty_ = false;
   }
 }
 
@@ -327,11 +338,7 @@ IMetalCommandBuffer& MetalContext::acquireMetalCommandBuffer(bool) {
       ++i;
     }
   }
-  if (residencyDirty_) {
-    residencySet_->commit();
-    residencySet_->requestResidency();
-    residencyDirty_ = false;
-  }
+  flushResidency();
   framePool_ = NS::AutoreleasePool::alloc()->init();
   currentWrapper_ = &immediate_->acquire();
   constantsCursor_ = currentWrapper_->bufferIndex * constantsFrameRegionBytes_;
@@ -406,6 +413,10 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
   }
   ns::setLabel(texture.get(), debugName ? debugName : desc.debugName);
   addResident(texture.get());
+
+  if (desc.data) {
+    staging_->uploadTexture(texture.get(), desc.dimensions.width, desc.dimensions.height, 0, 0, desc.data);
+  }
 
   const MTL::ResourceID rid = texture->gpuResourceID();
   MetalImage img;
@@ -629,11 +640,39 @@ void MetalContext::destroy(ArgumentTableHandle handle) {
   argumentTables_.destroy(handle);
 }
 
+bool MetalContext::startGpuCapture(const char* outputPath) {
+  MTL::CaptureManager* mgr = MTL::CaptureManager::sharedCaptureManager();
+  if (outputPath && !mgr->supportsDestination(MTL::CaptureDestinationGPUTraceDocument)) {
+    LLOGW("GPU trace capture unsupported; relaunch with MTL_CAPTURE_ENABLED=1");
+    return false;
+  }
+  NS::SharedPtr<MTL::CaptureDescriptor> desc = NS::TransferPtr(MTL::CaptureDescriptor::alloc()->init());
+  desc->setCaptureObject(device_.get());
+  desc->setDestination(outputPath ? MTL::CaptureDestinationGPUTraceDocument : MTL::CaptureDestinationDeveloperTools);
+  if (outputPath) {
+    desc->setOutputURL(NS::URL::fileURLWithPath(ns::string(outputPath)));
+  }
+  NS::Error* error = nullptr;
+  if (!mgr->startCapture(desc.get(), &error)) {
+    LLOGW("startCapture failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    return false;
+  }
+  return true;
+}
+
+void MetalContext::stopGpuCapture() {
+  MTL::CaptureManager::sharedCaptureManager()->stopCapture();
+}
+
 Result MetalContext::upload(BufferHandle handle, const void* data, size_t size, size_t offset) {
   MetalBuffer* mb = buffers_.get(handle);
-  if (!mb || !mb->buffer || !mb->buffer->contents())
+  if (!mb || !mb->buffer)
     return Result(Result::Code::ArgumentOutOfRange, "invalid buffer");
-  std::memcpy(static_cast<uint8_t*>(mb->buffer->contents()) + offset, data, size);
+  if (mb->buffer->contents()) {
+    std::memcpy(static_cast<uint8_t*>(mb->buffer->contents()) + offset, data, size);
+    return Result();
+  }
+  staging_->uploadBuffer(mb->buffer.get(), offset, size, data);
   return Result();
 }
 
@@ -653,6 +692,21 @@ uint8_t* MetalContext::getMappedPtr(BufferHandle handle) const {
 uint64_t MetalContext::gpuAddress(BufferHandle handle, size_t offset) const {
   const MetalBuffer* mb = buffers_.get(handle);
   return mb && mb->buffer ? mb->buffer->gpuAddress() + offset : 0;
+}
+
+Result MetalContext::upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength) {
+  MetalImage* img = textures_.get(handle);
+  if (!img || !img->texture)
+    return Result(Result::Code::ArgumentOutOfRange, "invalid texture");
+  if (img->texture->storageMode() == MTL::StorageModePrivate) {
+    staging_->uploadTexture(img->texture.get(), range.dimensions.width, range.dimensions.height, range.layer, range.mipLevel, data);
+    return Result();
+  }
+  const NS::UInteger bytesPerRow = NS::UInteger(bufferRowLength ? bufferRowLength : range.dimensions.width) * 4;
+  const MTL::Region region(
+      uint32_t(range.offset.x), uint32_t(range.offset.y), range.dimensions.width, range.dimensions.height);
+  img->texture->replaceRegion(region, range.mipLevel, range.layer, data, bytesPerRow, 0);
+  return Result();
 }
 
 Result MetalContext::download(TextureHandle handle, const TextureRangeDesc& range, void* outData) {
@@ -831,6 +885,13 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const l
   bindArgumentTableInternal(ctx_->defaultArgumentTable());
 }
 
+void CommandBuffer::cmdBarrierAfterTransfer() {
+  if (encoder_)
+    encoder_->barrierAfterQueueStages(MTL::StageDispatch | MTL::StageBlit,
+                                      MTL::StageVertex | MTL::StageFragment,
+                                      MTL4::VisibilityOptionDevice);
+}
+
 void CommandBuffer::cmdEndRendering() {
   if (encoder_) {
     encoder_->endEncoding();
@@ -958,10 +1019,77 @@ std::unique_ptr<IMetalContext> createContextWithMetalLayer(CA::MetalLayer* layer
                                                            uint32_t width,
                                                            uint32_t height,
                                                            const ContextConfig& config) {
-  std::unique_ptr<MetalContext> ctx = std::make_unique<MetalContext>();
+  std::unique_ptr<MetalContext> ctx =
+      config.validation ? std::make_unique<MetalValidatedContext>() : std::make_unique<MetalContext>();
   if (!ctx->initialize(layer, width, height, config))
     return nullptr;
   return ctx;
+}
+
+void MetalValidatedCommandBuffer::cmdPushConstants(const void* data, size_t size, size_t offset) {
+  const uint32_t maxSize = context()->pushConstantsSize();
+  if (offset + size > maxSize) {
+    LLOGW("validation: cmdPushConstants writes %zu bytes (offset %zu + size %zu) but the max push constants size is %u",
+          offset + size,
+          offset,
+          size,
+          maxSize);
+  }
+  CommandBuffer::cmdPushConstants(data, size, offset);
+}
+
+void MetalValidatedCommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
+                                                    const lvk::Framebuffer& desc,
+                                                    const Dependencies& deps) {
+  const uint32_t maxColor = context()->limits().maxColorRenderTargetsPerRenderPass;
+  if (desc.getNumColorAttachments() > maxColor) {
+    LLOGW("validation: cmdBeginRendering uses %u color attachments but the GPU supports at most %u",
+          desc.getNumColorAttachments(),
+          maxColor);
+  }
+  CommandBuffer::cmdBeginRendering(renderPass, desc, deps);
+}
+
+IMetalCommandBuffer& MetalValidatedContext::acquireMetalCommandBuffer(bool dedicatedCompute) {
+  MetalContext::acquireMetalCommandBuffer(dedicatedCompute);
+  return validatedCmdBuffer_;
+}
+
+Holder<TextureHandle> MetalValidatedContext::createTexture(const TextureDesc& desc, const char* debugName, Result* outResult) {
+  uint32_t maxDim = limits().max2DTextureWidthHeight;
+  const char* kind = "2D";
+  if (desc.type == TextureType_Cube) {
+    maxDim = limits().maxCubeMapTextureWidthHeight;
+    kind = "cube";
+  } else if (desc.type == TextureType_3D) {
+    maxDim = limits().max3DTextureWidthHeightDepth;
+    kind = "3D";
+  }
+  const uint32_t depth = desc.type == TextureType_3D ? desc.dimensions.depth : 1;
+  if (desc.dimensions.width > maxDim || desc.dimensions.height > maxDim || depth > maxDim) {
+    LLOGW("validation: createTexture '%s' is %ux%ux%u but the GPU max %s texture dimension is %u",
+          debugName ? debugName : desc.debugName,
+          desc.dimensions.width,
+          desc.dimensions.height,
+          depth,
+          kind,
+          maxDim);
+  }
+  if (desc.numLayers > limits().maxLayersPerTextureArray) {
+    LLOGW("validation: createTexture numLayers %u exceeds the GPU max texture array layers %u",
+          desc.numLayers,
+          limits().maxLayersPerTextureArray);
+  }
+  return MetalContext::createTexture(desc, debugName, outResult);
+}
+
+Holder<RenderPipelineHandle> MetalValidatedContext::createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult) {
+  if (desc.getNumColorAttachments() > limits().maxColorRenderTargetsPerRenderPass) {
+    LLOGW("validation: createRenderPipeline has %u color attachments but the GPU supports at most %u",
+          desc.getNumColorAttachments(),
+          limits().maxColorRenderTargetsPerRenderPass);
+  }
+  return MetalContext::createRenderPipeline(desc, outResult);
 }
 
 } // namespace lvk::metal

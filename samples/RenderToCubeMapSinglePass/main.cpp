@@ -18,29 +18,38 @@ static const char* kShaderMSL = R"(
 using namespace metal;
 
 struct TriPush {
-  uint face;
   float time;
 };
 
 struct TriOut {
   float4 position [[position]];
-  float3 color;
 };
 
 vertex TriOut triVertexMain(uint vid [[vertex_id]], constant TriPush& pc [[buffer(0)]]) {
   const float2 p[3] = { float2(-0.6, -0.6), float2(0.6, -0.6), float2(0.0, 0.6) };
-  const float3 c[6] = {
-    float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0),
-    float3(1.0, 0.0, 1.0), float3(1.0, 1.0, 0.0), float3(0.0, 1.0, 1.0)
-  };
   TriOut o;
   o.position = float4(p[vid] * (1.5 + sin(pc.time)) * 0.5, 0.0, 1.0);
-  o.color = c[pc.face];
   return o;
 }
 
-fragment float4 triFragmentMain(TriOut in [[stage_in]]) {
-  return float4(in.color, 1.0);
+struct TriFragOut {
+  float4 color0 [[color(0)]];
+  float4 color1 [[color(1)]];
+  float4 color2 [[color(2)]];
+  float4 color3 [[color(3)]];
+  float4 color4 [[color(4)]];
+  float4 color5 [[color(5)]];
+};
+
+fragment TriFragOut triFragmentMain() {
+  TriFragOut o;
+  o.color0 = float4(1.0, 0.0, 0.0, 1.0);
+  o.color1 = float4(0.0, 1.0, 0.0, 1.0);
+  o.color2 = float4(0.0, 0.0, 1.0, 1.0);
+  o.color3 = float4(1.0, 0.0, 1.0, 1.0);
+  o.color4 = float4(1.0, 1.0, 0.0, 1.0);
+  o.color5 = float4(0.0, 1.0, 1.0, 1.0);
+  return o;
 }
 
 struct CubePush {
@@ -70,7 +79,7 @@ fragment float4 meshFragmentMain(MeshOut in [[stage_in]], constant CubePush& pc 
 }
 )";
 
-class RenderToCubeMap final : public lvk::metal::ISample {
+class RenderToCubeMapSinglePass final : public lvk::metal::ISample {
  public:
   void init(lvk::metal::IMetalContext& ctx, GLFWwindow*, uint32_t width, uint32_t height, float displayScale) override {
     width_ = width;
@@ -127,7 +136,12 @@ class RenderToCubeMap final : public lvk::metal::ISample {
     pipelineTriangle_ = ctx.createRenderPipeline({
         .smVert = triVert,
         .smFrag = triFrag,
-        .color = {{.format = ctx.getFormat(cubeMap_)}},
+        .color = {{.format = ctx.getFormat(cubeMap_)},
+                  {.format = ctx.getFormat(cubeMap_)},
+                  {.format = ctx.getFormat(cubeMap_)},
+                  {.format = ctx.getFormat(cubeMap_)},
+                  {.format = ctx.getFormat(cubeMap_)},
+                  {.format = ctx.getFormat(cubeMap_)}},
         .debugName = "Pipeline: triangle",
     });
 
@@ -148,24 +162,23 @@ class RenderToCubeMap final : public lvk::metal::ISample {
     const glm::mat4 model = glm::rotate(glm::mat4(1.0f), time, glm::normalize(glm::vec3(1.0f, 1.0f, 1.0f)));
 
     cmd.cmdPushDebugGroupLabel("Render to Cube Map");
-    for (uint8_t face = 0; face != 6; ++face) {
-      const lvk::ClearColorValue colors[6] = {{0.3f, 0.1f, 0.1f, 1.0f}, {0.1f, 0.3f, 0.1f, 1.0f}, {0.1f, 0.1f, 0.3f, 1.0f},
-                                              {0.3f, 0.1f, 0.3f, 1.0f}, {0.3f, 0.3f, 0.1f, 1.0f}, {0.1f, 0.3f, 0.3f, 1.0f}};
-      const lvk::RenderPass facePass = {
-          .color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = face, .clearColor = colors[face]}},
-      };
-      const lvk::Framebuffer faceFb = {.color = {{.texture = cubeMap_}}};
-
-      cmd.cmdBeginRendering(facePass, faceFb);
-      cmd.cmdBindRenderPipeline(pipelineTriangle_);
-      const struct {
-        uint32_t face;
-        float time;
-      } triPush = {.face = face, .time = 10.0f * time};
-      cmd.cmdPushConstants(triPush);
-      cmd.cmdDraw(3);
-      cmd.cmdEndRendering();
-    }
+    const lvk::RenderPass cubePass = {
+        .color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = 0, .clearColor = {0.3f, 0.1f, 0.1f, 1.0f}},
+                  {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = 1, .clearColor = {0.1f, 0.3f, 0.1f, 1.0f}},
+                  {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = 2, .clearColor = {0.1f, 0.1f, 0.3f, 1.0f}},
+                  {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = 3, .clearColor = {0.3f, 0.1f, 0.3f, 1.0f}},
+                  {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = 4, .clearColor = {0.3f, 0.3f, 0.1f, 1.0f}},
+                  {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = 5, .clearColor = {0.1f, 0.3f, 0.3f, 1.0f}}},
+    };
+    const lvk::Framebuffer cubeFb = {
+        .color = {{.texture = cubeMap_}, {.texture = cubeMap_}, {.texture = cubeMap_},
+                  {.texture = cubeMap_}, {.texture = cubeMap_}, {.texture = cubeMap_}},
+    };
+    cmd.cmdBeginRendering(cubePass, cubeFb);
+    cmd.cmdBindRenderPipeline(pipelineTriangle_);
+    cmd.cmdPushConstants(10.0f * time);
+    cmd.cmdDraw(3);
+    cmd.cmdEndRendering();
     cmd.cmdPopDebugGroupLabel();
 
     const lvk::RenderPass meshPass = {
@@ -206,4 +219,4 @@ class RenderToCubeMap final : public lvk::metal::ISample {
   uint32_t height_ = 0;
 };
 
-DESKTOP_MAIN(RenderToCubeMap)
+DESKTOP_MAIN(RenderToCubeMapSinglePass)

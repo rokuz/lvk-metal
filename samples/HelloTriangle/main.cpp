@@ -34,7 +34,7 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]]) {
 
 class HelloTriangle final : public lvk::metal::ISample {
  public:
-  void init(lvk::metal::IMetalContext& ctx, uint32_t width, uint32_t height) override {
+  void init(lvk::metal::IMetalContext& ctx, GLFWwindow*, uint32_t width, uint32_t height, float displayScale) override {
     width_ = width;
     height_ = height;
 

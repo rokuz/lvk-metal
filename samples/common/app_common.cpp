@@ -55,7 +55,7 @@ bool writeScreenshotPNG(lvk::IContext& ctx, lvk::TextureHandle texture, uint32_t
   return true;
 }
 
-int run(int argc, char** argv, const char* title, ISample& sample) {
+int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& sample) {
   const AppConfig app = parseAppConfig(argc, argv);
 
   if (!glfwInit()) {
@@ -83,8 +83,11 @@ int run(int argc, char** argv, const char* title, ISample& sample) {
   CA::MetalLayer* layer = CA::MetalLayer::layer();
   lvkMetalAttachLayer(layer, window);
 
+  float scaleX, scaleY;
+  glfwGetWindowContentScale(window, &scaleX, &scaleY);
+
   std::unique_ptr<lvk::metal::IMetalContext> ctx = lvk::metal::createContextWithMetalLayer(
-      layer, uint32_t(fbWidth), uint32_t(fbHeight), {.vsync = true, .headless = app.headless});
+      layer, uint32_t(fbWidth), uint32_t(fbHeight), {.vsync = true, .headless = app.headless, .validation = true});
   if (!ctx) {
     LLOGE("createContextWithMetalLayer failed");
     glfwDestroyWindow(window);
@@ -92,28 +95,36 @@ int run(int argc, char** argv, const char* title, ISample& sample) {
     return EXIT_FAILURE;
   }
 
-  sample.init(*ctx, uint32_t(fbWidth), uint32_t(fbHeight));
+  sample->init(*ctx, app.headless ? nullptr : window, uint32_t(fbWidth), uint32_t(fbHeight), std::max(scaleX, scaleY));
 
   int exitCode = 0;
   if (app.screenshot()) {
+    const char* gpuCapturePath = getenv("LVKM_GPU_CAPTURE");
+    if (gpuCapturePath)
+      ctx->startGpuCapture(gpuCapturePath);
     const float time = float(app.screenshotFrame) / 60.0f;
     lvk::ICommandBuffer& cmd = ctx->acquireCommandBuffer();
     const lvk::TextureHandle swapchain = ctx->getCurrentSwapchainTexture();
-    sample.render(cmd, swapchain, time);
+    sample->render(cmd, swapchain, time);
     const lvk::SubmitHandle handle = ctx->submit(cmd, {});
     ctx->wait(handle);
+    if (gpuCapturePath)
+      ctx->stopGpuCapture();
     exitCode = writeScreenshotPNG(*ctx, swapchain, uint32_t(fbWidth), uint32_t(fbHeight), app.screenshotFile.c_str()) ? 0 : 1;
   } else {
     while (!glfwWindowShouldClose(window)) {
       glfwPollEvents();
+
       lvk::ICommandBuffer& cmd = ctx->acquireCommandBuffer();
       const lvk::TextureHandle swapchain = ctx->getCurrentSwapchainTexture();
-      sample.render(cmd, swapchain, float(glfwGetTime()));
+      sample->render(cmd, swapchain, float(glfwGetTime()));
       ctx->submit(cmd, swapchain);
     }
   }
 
-  sample.destroy();
+  sample->destroy();
+  sample.reset();
+  
   ctx.reset();
 
   glfwDestroyWindow(window);

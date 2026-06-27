@@ -3,7 +3,10 @@
 #include <lvk/LVK-Metal.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
+
+struct GLFWwindow;
 
 namespace lvk::metal {
 
@@ -25,17 +28,18 @@ bool writeScreenshotPNG(lvk::IContext& ctx, lvk::TextureHandle texture, uint32_t
 
 struct ISample {
   virtual ~ISample() = default;
-  virtual void init(lvk::metal::IMetalContext& ctx, uint32_t width, uint32_t height) = 0;
+  virtual void init(lvk::metal::IMetalContext& ctx, GLFWwindow* window, uint32_t width, uint32_t height, float displayScale) = 0;
   virtual void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float timeSeconds) = 0;
-  virtual void destroy() = 0;
+  virtual void destroy() {}
 };
 
-int run(int argc, char** argv, const char* title, ISample& sample);
+int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& sample);
 
 } // namespace lvk::metal
 
 #define DESKTOP_MAIN(SampleClass)                                            \
   int main(int argc, char** argv) {                                          \
-    SampleClass sample;                                                      \
+    std::unique_ptr<lvk::metal::ISample> sample =                            \
+        std::make_unique<SampleClass>();                                     \
     return lvk::metal::run(argc, argv, "[lvk-metal] " #SampleClass, sample); \
   }
