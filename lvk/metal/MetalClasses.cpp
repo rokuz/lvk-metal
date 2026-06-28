@@ -35,6 +35,23 @@ MTL::StoreAction toStoreAction(lvk::StoreOp op) {
   }
 }
 
+MTL::StoreAction toStoreAction(lvk::StoreOp op, bool resolve) {
+  if (resolve)
+    return op == lvk::StoreOp_Store ? MTL::StoreActionStoreAndMultisampleResolve : MTL::StoreActionMultisampleResolve;
+  return toStoreAction(op);
+}
+
+MTL::MultisampleDepthResolveFilter toMTLDepthResolveFilter(lvk::ResolveMode mode) {
+  switch (mode) {
+  case lvk::ResolveMode_Min:
+    return MTL::MultisampleDepthResolveFilterMin;
+  case lvk::ResolveMode_Max:
+    return MTL::MultisampleDepthResolveFilterMax;
+  default:
+    return MTL::MultisampleDepthResolveFilterSample0;
+  }
+}
+
 bool formatHasStencil(MTL::PixelFormat f) {
   switch (f) {
   case MTL::PixelFormatStencil8:
@@ -448,15 +465,16 @@ Holder<BufferHandle> MetalContext::createBuffer(const BufferDesc& desc, const ch
 }
 
 Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const char* debugName, Result* outResult) {
+  const uint32_t numSamples = desc.numSamples ? desc.numSamples : 1;
   NS::SharedPtr<MTL::TextureDescriptor> td = ns::make<MTL::TextureDescriptor>();
-  td->setTextureType(toMTLTextureType(desc.type, desc.numLayers));
+  td->setTextureType(toMTLTextureType(desc.type, desc.numLayers, numSamples));
   td->setPixelFormat(toMTLPixelFormat(desc.format));
   td->setWidth(desc.dimensions.width);
   td->setHeight(desc.dimensions.height);
   td->setDepth(desc.type == TextureType_3D ? desc.dimensions.depth : 1);
   td->setMipmapLevelCount(desc.numMipLevels);
   td->setArrayLength(desc.numLayers ? desc.numLayers : 1);
-  td->setSampleCount(desc.numSamples);
+  td->setSampleCount(numSamples);
   td->setUsage(toMTLTextureUsage(desc.usage));
   td->setStorageMode(toMTLStorageMode(desc.storage));
 
@@ -673,6 +691,7 @@ Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipe
   if (desc.stencilFormat != Format_Invalid)
     rpd->setStencilAttachmentPixelFormat(toMTLPixelFormat(desc.stencilFormat));
   rpd->setRasterSampleCount(desc.samplesCount ? desc.samplesCount : 1);
+  rpd->setAlphaToCoverageEnabled(desc.alphaToCoverage);
 
   NS::Error* error = nullptr;
   NS::SharedPtr<MTL::RenderPipelineState> pipeline = NS::TransferPtr(device_->newRenderPipelineState(rpd.get(), &error));
@@ -1060,7 +1079,13 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
     att->setSlice(renderPass.color[i].layer);
     att->setLevel(renderPass.color[i].level);
     att->setLoadAction(toLoadAction(renderPass.color[i].loadOp));
-    att->setStoreAction(toStoreAction(renderPass.color[i].storeOp));
+    const bool resolve = !framebuffer.color[i].resolveTexture.empty();
+    if (resolve) {
+      const MetalImage* resolveImg = ctx_->getImage(framebuffer.color[i].resolveTexture);
+      LVK_ASSERT(resolveImg && resolveImg->texture);
+      att->setResolveTexture(resolveImg->texture.get());
+    }
+    att->setStoreAction(toStoreAction(renderPass.color[i].storeOp, resolve));
     const float* c = renderPass.color[i].clearColor.float32;
     att->setClearColor(MTL::ClearColor(c[0], c[1], c[2], c[3]));
     rtWidth = img->width;
@@ -1070,12 +1095,19 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
   if (framebuffer.depthStencil.texture) {
     const MetalImage* img = ctx_->getImage(framebuffer.depthStencil.texture);
     LVK_ASSERT(img && img->texture);
+    const bool resolve = !framebuffer.depthStencil.resolveTexture.empty();
+    const MetalImage* resolveImg = resolve ? ctx_->getImage(framebuffer.depthStencil.resolveTexture) : nullptr;
     MTL::RenderPassDepthAttachmentDescriptor* att = rpd->depthAttachment();
     att->setTexture(img->texture.get());
     att->setSlice(renderPass.depth.layer);
     att->setLevel(renderPass.depth.level);
     att->setLoadAction(toLoadAction(renderPass.depth.loadOp));
-    att->setStoreAction(toStoreAction(renderPass.depth.storeOp));
+    if (resolve) {
+      LVK_ASSERT(resolveImg && resolveImg->texture);
+      att->setResolveTexture(resolveImg->texture.get());
+      att->setDepthResolveFilter(toMTLDepthResolveFilter(renderPass.depth.resolveMode));
+    }
+    att->setStoreAction(toStoreAction(renderPass.depth.storeOp, resolve));
     att->setClearDepth(renderPass.depth.clearDepth);
     if (formatHasStencil(img->format)) {
       MTL::RenderPassStencilAttachmentDescriptor* satt = rpd->stencilAttachment();
@@ -1083,7 +1115,11 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
       satt->setSlice(renderPass.stencil.layer);
       satt->setLevel(renderPass.stencil.level);
       satt->setLoadAction(toLoadAction(renderPass.stencil.loadOp));
-      satt->setStoreAction(toStoreAction(renderPass.stencil.storeOp));
+      if (resolve) {
+        satt->setResolveTexture(resolveImg->texture.get());
+        satt->setStencilResolveFilter(MTL::MultisampleStencilResolveFilterSample0);
+      }
+      satt->setStoreAction(toStoreAction(renderPass.stencil.storeOp, resolve));
       satt->setClearStencil(renderPass.stencil.clearStencil);
     }
     rtWidth = img->width;

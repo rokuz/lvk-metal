@@ -325,11 +325,12 @@ struct LoadedMaterial {
 
 class Bistro final : public lvk::metal::ISample {
  public:
-  void init(lvk::metal::IMetalContext& ctx, GLFWwindow* window, uint32_t width, uint32_t height, float) override {
+  void init(lvk::metal::IMetalContext& ctx, GLFWwindow* window, uint32_t width, uint32_t height, float, uint32_t samplesCount) override {
     ctx_ = &ctx;
     width_ = width;
     height_ = height;
     window_ = window;
+    samplesCount_ = samplesCount > 1 ? samplesCount : 1;
     positioner_ = CameraPositioner_FirstPerson(vec3(-100, 40, -47), vec3(0, 35, 0), vec3(0, 1, 0));
 
     {
@@ -452,10 +453,16 @@ class Bistro final : public lvk::metal::ISample {
     const ScenePC scenePC = {
         ctx_->gpuAddress(ubPerFrame_[r]), ctx_->gpuAddress(ubPerObject_[r]), ctx_->gpuAddress(sbMaterials_), vbAddress_};
 
-    cmd.cmdBeginRendering({.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}},
-                           .depth = {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_DontCare, .clearDepth = 1.0f}},
-                          {.color = {{.texture = offscreenColor_}}, .depthStencil = {.texture = offscreenDepth_}},
-                          {.sampledImages = {shadowMap_}});
+    const bool msaa = samplesCount_ > 1;
+    const lvk::TextureHandle msaaColorTex = offscreenColorMSAA_;
+    const lvk::TextureHandle resolvedColorTex = offscreenColor_;
+    const lvk::TextureHandle sceneColorTex = msaa ? msaaColorTex : resolvedColorTex;
+    const lvk::TextureHandle sceneResolveTex = msaa ? resolvedColorTex : lvk::TextureHandle{};
+    cmd.cmdBeginRendering(
+        {.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = msaa ? lvk::StoreOp_DontCare : lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}},
+         .depth = {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_DontCare, .clearDepth = 1.0f}},
+        {.color = {{.texture = sceneColorTex, .resolveTexture = sceneResolveTex}}, .depthStencil = {.texture = offscreenDepth_}},
+        {.sampledImages = {shadowMap_}});
     cmd.cmdBindViewport({.x = 0, .y = 0, .width = float(width_), .height = float(height_)});
     cmd.cmdBindScissorRect({.x = 0, .y = 0, .width = width_, .height = height_});
 
@@ -567,10 +574,22 @@ class Bistro final : public lvk::metal::ISample {
         .storage = lvk::StorageType_Device,
         .debugName = "Offscreen color",
     });
+    if (samplesCount_ > 1) {
+      offscreenColorMSAA_ = ctx.createTexture({
+          .type = lvk::TextureType_2D,
+          .format = lvk::Format_RGBA_UN8,
+          .dimensions = {width_, height_},
+          .numSamples = samplesCount_,
+          .usage = lvk::TextureUsageBits_Attachment,
+          .storage = lvk::StorageType_Device,
+          .debugName = "Offscreen color MSAA",
+      });
+    }
     offscreenDepth_ = ctx.createTexture({
         .type = lvk::TextureType_2D,
         .format = lvk::Format_Z_F32,
         .dimensions = {width_, height_},
+        .numSamples = samplesCount_,
         .usage = lvk::TextureUsageBits_Attachment,
         .storage = lvk::StorageType_Device,
         .debugName = "Offscreen depth",
@@ -620,6 +639,7 @@ class Bistro final : public lvk::metal::ISample {
         .depthFormat = lvk::Format_Z_F32,
         .cullMode = lvk::CullMode_Back,
         .frontFace = lvk::WindingMode_CCW,
+        .samplesCount = samplesCount_,
         .debugName = "Pipeline: mesh",
     });
     lvk::RenderPipelineDesc wire = {
@@ -629,6 +649,7 @@ class Bistro final : public lvk::metal::ISample {
         .depthFormat = lvk::Format_Z_F32,
         .cullMode = lvk::CullMode_None,
         .polygonMode = lvk::PolygonMode_Line,
+        .samplesCount = samplesCount_,
         .debugName = "Pipeline: wireframe",
     };
     pipelineWireframe_ = ctx.createRenderPipeline(wire);
@@ -646,6 +667,7 @@ class Bistro final : public lvk::metal::ISample {
         .depthFormat = lvk::Format_Z_F32,
         .cullMode = lvk::CullMode_Front,
         .frontFace = lvk::WindingMode_CCW,
+        .samplesCount = samplesCount_,
         .debugName = "Pipeline: skybox",
     });
     pipelineFullscreen_ = ctx.createRenderPipeline({
@@ -989,6 +1011,7 @@ class Bistro final : public lvk::metal::ISample {
   GLFWwindow* window_ = nullptr;
   uint32_t width_ = 0;
   uint32_t height_ = 0;
+  uint32_t samplesCount_ = 1;
   float lastTime_ = -1.0f;
   uint32_t frameIdx_ = 0;
   uint32_t numIndices_ = 0;
@@ -1022,7 +1045,8 @@ class Bistro final : public lvk::metal::ISample {
   lvk::Holder<lvk::ComputePipelineHandle> pipelineGrayscale_;
 
   lvk::Holder<lvk::SamplerHandle> sampler_, samplerShadow_;
-  lvk::Holder<lvk::TextureHandle> textureDummyWhite_, shadowMap_, offscreenColor_, offscreenDepth_, skyboxRadiance_, skyboxIrradiance_;
+  lvk::Holder<lvk::TextureHandle> textureDummyWhite_, shadowMap_, offscreenColor_, offscreenColorMSAA_, offscreenDepth_, skyboxRadiance_,
+      skyboxIrradiance_;
   lvk::Holder<lvk::BufferHandle> vb0_, ib0_, sbMaterials_;
   lvk::Holder<lvk::BufferHandle> ubPerFrame_[kRing], ubPerFrameShadow_[kRing], ubPerObject_[kRing];
   uint64_t vbAddress_ = 0;

@@ -394,7 +394,7 @@ struct RenderOp {
 
 class SolarSystem final : public lvk::metal::ISample {
  public:
-  void init(lvk::metal::IMetalContext& ctx, GLFWwindow* window, uint32_t width, uint32_t height, float displayScale) override {
+  void init(lvk::metal::IMetalContext& ctx, GLFWwindow* window, uint32_t width, uint32_t height, float displayScale, uint32_t) override {
     width_ = width;
     height_ = height;
     window_ = window;

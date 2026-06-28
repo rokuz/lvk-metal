@@ -31,6 +31,8 @@ AppConfig parseAppConfig(int argc, char** argv) {
       cfg.width = std::atoi(argv[++i]);
     } else if (arg == "--height" && i + 1 < argc) {
       cfg.height = std::atoi(argv[++i]);
+    } else if (arg == "--msaa" && i + 1 < argc) {
+      cfg.msaa = std::atoi(argv[++i]);
     }
   }
   return cfg;
@@ -97,7 +99,12 @@ int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& samp
     return EXIT_FAILURE;
   }
 
-  sample->init(*ctx, app.headless ? nullptr : window, uint32_t(fbWidth), uint32_t(fbHeight), std::max(scaleX, scaleY));
+  sample->init(*ctx,
+               app.headless ? nullptr : window,
+               uint32_t(fbWidth),
+               uint32_t(fbHeight),
+               std::max(scaleX, scaleY),
+               uint32_t(app.msaa > 0 ? app.msaa : 1));
 
   int exitCode = 0;
   if (app.screenshot()) {

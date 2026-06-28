@@ -17,6 +17,7 @@ struct AppConfig {
   bool headless = false;
   int width = 0;
   int height = 0;
+  int msaa = 1;
 
   bool screenshot() const {
     return !screenshotFile.empty();
@@ -29,7 +30,12 @@ bool writeScreenshotPNG(lvk::IContext& ctx, lvk::TextureHandle texture, uint32_t
 
 struct ISample {
   virtual ~ISample() = default;
-  virtual void init(lvk::metal::IMetalContext& ctx, GLFWwindow* window, uint32_t width, uint32_t height, float displayScale) = 0;
+  virtual void init(lvk::metal::IMetalContext& ctx,
+                    GLFWwindow* window,
+                    uint32_t width,
+                    uint32_t height,
+                    float displayScale,
+                    uint32_t samplesCount) = 0;
   virtual void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float timeSeconds) = 0;
   virtual void destroy() {}
 };

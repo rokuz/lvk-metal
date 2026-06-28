@@ -81,7 +81,7 @@ fragment float4 meshFragmentMain(MeshOut in [[stage_in]], constant CubePush& pc 
 
 class RenderToCubeMapSinglePass final : public lvk::metal::ISample {
  public:
-  void init(lvk::metal::IMetalContext& ctx, GLFWwindow*, uint32_t width, uint32_t height, float displayScale) override {
+  void init(lvk::metal::IMetalContext& ctx, GLFWwindow*, uint32_t width, uint32_t height, float displayScale, uint32_t) override {
     width_ = width;
     height_ = height;
 

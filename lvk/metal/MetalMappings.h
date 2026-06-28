@@ -92,9 +92,11 @@ inline MTL::PixelFormat toMTLPixelFormat(Format format) {
   }
 }
 
-inline MTL::TextureType toMTLTextureType(TextureType type, uint32_t numLayers) {
+inline MTL::TextureType toMTLTextureType(TextureType type, uint32_t numLayers, uint32_t numSamples) {
   switch (type) {
   case TextureType_2D:
+    if (numSamples > 1)
+      return numLayers > 1 ? MTL::TextureType2DMultisampleArray : MTL::TextureType2DMultisample;
     return numLayers > 1 ? MTL::TextureType2DArray : MTL::TextureType2D;
   case TextureType_3D:
     return MTL::TextureType3D;
