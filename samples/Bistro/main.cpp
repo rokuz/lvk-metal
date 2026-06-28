@@ -364,18 +364,18 @@ class Bistro final : public lvk::metal::ISample {
       ubPerObject_[i] = makeUniform(ctx, sizeof(PerObject), "perObject");
     }
 
-    imgui_ = std::make_unique<lvk::metal::ImGuiRenderer>(ctx, window_);
-
-    initModel(ctx);
-    loadSkybox(ctx);
-    loadMaterials();
-
     if (window_) {
       glfwSetWindowUserPointer(window_, this);
       glfwSetKeyCallback(window_, keyCallback);
       glfwSetMouseButtonCallback(window_, mouseButtonCallback);
       glfwSetCursorPosCallback(window_, cursorPosCallback);
     }
+
+    imgui_ = std::make_unique<lvk::metal::ImGuiRenderer>(ctx, window_);
+
+    initModel(ctx);
+    loadSkybox(ctx);
+    loadMaterials();
   }
 
   void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float time) override {

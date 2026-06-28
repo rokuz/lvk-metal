@@ -419,14 +419,14 @@ class SolarSystem final : public lvk::metal::ISample {
         .debugName = "depth",
     });
 
-    imgui_ = std::make_unique<lvk::metal::ImGuiRenderer>(ctx, window_);
-
     if (window_) {
       glfwSetWindowUserPointer(window_, this);
       glfwSetKeyCallback(window_, keyCallback);
       glfwSetMouseButtonCallback(window_, mouseButtonCallback);
       glfwSetCursorPosCallback(window_, cursorPosCallback);
     }
+
+    imgui_ = std::make_unique<lvk::metal::ImGuiRenderer>(ctx, window_);
   }
 
   void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float time) override {
