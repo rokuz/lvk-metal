@@ -30,9 +30,8 @@ void MetalStagingDevice::uploadBuffer(MTL::Buffer* buffer, size_t dstOffset, siz
     const MetalImmediateCommands::CommandBufferWrapper& wrapper = ctx_.immediate_->acquire();
     MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
     enc->copyFromBuffer(stagingBuffer_.get(), desc.offset_, buffer, dstOffset, chunkSize);
-    enc->barrierAfterStages(MTL::StageBlit | MTL::StageDispatch,
-                            MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch,
-                            MTL4::VisibilityOptionDevice);
+    enc->barrierAfterStages(
+        MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
     enc->endEncoding();
 
     desc.handle_ = ctx_.immediate_->submit(wrapper);
@@ -45,13 +44,21 @@ void MetalStagingDevice::uploadBuffer(MTL::Buffer* buffer, size_t dstOffset, siz
 }
 
 void MetalStagingDevice::uploadTexture(MTL::Texture* texture,
+                                       uint32_t x,
+                                       uint32_t y,
+                                       uint32_t z,
                                        uint32_t width,
                                        uint32_t height,
+                                       uint32_t depth,
                                        uint32_t slice,
                                        uint32_t mipLevel,
-                                       const void* data) {
-  const uint64_t bytesPerRow = uint64_t(width) * bytesPerMetalPixel(texture->pixelFormat());
-  const uint64_t storageSize = bytesPerRow * height;
+                                       const void* data,
+                                       uint32_t bufferRowLength) {
+  const uint64_t bpp = bytesPerMetalPixel(texture->pixelFormat());
+  const uint64_t dstBytesPerRow = uint64_t(width) * bpp;
+  const uint64_t dstBytesPerImage = dstBytesPerRow * height;
+  const uint64_t srcBytesPerRow = uint64_t(bufferRowLength ? bufferRowLength : width) * bpp;
+  const uint64_t storageSize = dstBytesPerImage * depth;
 
   ensureStagingBufferSize(storageSize);
   LVK_ASSERT(storageSize <= stagingBufferSize_);
@@ -63,7 +70,15 @@ void MetalStagingDevice::uploadTexture(MTL::Texture* texture,
   }
   LVK_ASSERT(desc.size_ >= storageSize);
 
-  std::memcpy(static_cast<uint8_t*>(stagingBuffer_->contents()) + desc.offset_, data, storageSize);
+  uint8_t* dst = static_cast<uint8_t*>(stagingBuffer_->contents()) + desc.offset_;
+  const uint8_t* src = static_cast<const uint8_t*>(data);
+  if (srcBytesPerRow == dstBytesPerRow) {
+    std::memcpy(dst, src, storageSize);
+  } else {
+    for (uint32_t row = 0; row < height * depth; ++row) {
+      std::memcpy(dst + row * dstBytesPerRow, src + row * srcBytesPerRow, dstBytesPerRow);
+    }
+  }
 
   ctx_.flushResidency();
 
@@ -71,16 +86,15 @@ void MetalStagingDevice::uploadTexture(MTL::Texture* texture,
   MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
   enc->copyFromBuffer(stagingBuffer_.get(),
                       desc.offset_,
-                      bytesPerRow,
-                      storageSize,
-                      MTL::Size(width, height, 1),
+                      dstBytesPerRow,
+                      dstBytesPerImage,
+                      MTL::Size(width, height, depth),
                       texture,
                       slice,
                       mipLevel,
-                      MTL::Origin(0, 0, 0));
-  enc->barrierAfterStages(MTL::StageBlit | MTL::StageDispatch,
-                          MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch,
-                          MTL4::VisibilityOptionDevice);
+                      MTL::Origin(x, y, z));
+  enc->barrierAfterStages(
+      MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
   enc->endEncoding();
 
   desc.handle_ = ctx_.immediate_->submit(wrapper);

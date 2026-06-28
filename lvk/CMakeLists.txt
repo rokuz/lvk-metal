@@ -16,12 +16,9 @@ add_library(lvk-metal-imgui STATIC "${LVK_METAL_ROOT}/lvk/HelpersImGuiMetal.cpp"
 
 target_compile_features(lvk-metal-imgui PUBLIC cxx_std_20)
 
-target_include_directories(lvk-metal-imgui PUBLIC
-  "${LVK_METAL_ROOT}"
-  "${LVK_METAL_METAL_CPP_DIR}"
-  "${LVK_METAL_LVK_DIR}/third-party/deps/src"
-  "${LVK_METAL_LVK_DIR}/third-party/deps/src/imgui"
-  "$<TARGET_PROPERTY:LVKLibrary,INTERFACE_INCLUDE_DIRECTORIES>")
+target_include_directories(
+  lvk-metal-imgui PUBLIC "${LVK_METAL_ROOT}" "${LVK_METAL_METAL_CPP_DIR}" "${LVK_METAL_LVK_DIR}/third-party/deps/src"
+                         "${LVK_METAL_LVK_DIR}/third-party/deps/src/imgui" "$<TARGET_PROPERTY:LVKLibrary,INTERFACE_INCLUDE_DIRECTORIES>")
 
 target_compile_definitions(lvk-metal-imgui PRIVATE "$<TARGET_PROPERTY:LVKLibrary,INTERFACE_COMPILE_DEFINITIONS>")
 

@@ -149,8 +149,12 @@ class RenderToCubeMap final : public lvk::metal::ISample {
 
     cmd.cmdPushDebugGroupLabel("Render to Cube Map");
     for (uint8_t face = 0; face != 6; ++face) {
-      const lvk::ClearColorValue colors[6] = {{0.3f, 0.1f, 0.1f, 1.0f}, {0.1f, 0.3f, 0.1f, 1.0f}, {0.1f, 0.1f, 0.3f, 1.0f},
-                                              {0.3f, 0.1f, 0.3f, 1.0f}, {0.3f, 0.3f, 0.1f, 1.0f}, {0.1f, 0.3f, 0.3f, 1.0f}};
+      const lvk::ClearColorValue colors[6] = {{0.3f, 0.1f, 0.1f, 1.0f},
+                                              {0.1f, 0.3f, 0.1f, 1.0f},
+                                              {0.1f, 0.1f, 0.3f, 1.0f},
+                                              {0.3f, 0.1f, 0.3f, 1.0f},
+                                              {0.3f, 0.3f, 0.1f, 1.0f},
+                                              {0.1f, 0.3f, 0.3f, 1.0f}};
       const lvk::RenderPass facePass = {
           .color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = face, .clearColor = colors[face]}},
       };

@@ -89,7 +89,7 @@ int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& samp
   glfwGetWindowContentScale(window, &scaleX, &scaleY);
 
   std::unique_ptr<lvk::metal::IMetalContext> ctx = lvk::metal::createContextWithMetalLayer(
-      layer, uint32_t(fbWidth), uint32_t(fbHeight), {.vsync = true, .headless = app.headless, .validation = true});
+      layer, uint32_t(fbWidth), uint32_t(fbHeight), {.vsync = false, .headless = app.headless, .validation = true});
   if (!ctx) {
     LLOGE("createContextWithMetalLayer failed");
     glfwDestroyWindow(window);
@@ -131,7 +131,7 @@ int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& samp
 
   sample->destroy();
   sample.reset();
-  
+
   ctx.reset();
 
   glfwDestroyWindow(window);

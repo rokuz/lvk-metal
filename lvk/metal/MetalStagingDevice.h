@@ -18,7 +18,17 @@ class MetalStagingDevice final {
   MetalStagingDevice& operator=(const MetalStagingDevice&) = delete;
 
   void uploadBuffer(MTL::Buffer* buffer, size_t dstOffset, size_t size, const void* data);
-  void uploadTexture(MTL::Texture* texture, uint32_t width, uint32_t height, uint32_t slice, uint32_t mipLevel, const void* data);
+  void uploadTexture(MTL::Texture* texture,
+                     uint32_t x,
+                     uint32_t y,
+                     uint32_t z,
+                     uint32_t width,
+                     uint32_t height,
+                     uint32_t depth,
+                     uint32_t slice,
+                     uint32_t mipLevel,
+                     const void* data,
+                     uint32_t bufferRowLength);
 
  private:
   enum { kStagingBufferAlignment = 16 };

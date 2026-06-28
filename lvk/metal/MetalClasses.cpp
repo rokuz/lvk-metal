@@ -4,8 +4,8 @@
 
 #include "lvk/metal/MetalClasses.h"
 #include "lvk/metal/MetalLimits.h"
-#include "lvk/metal/MetalStagingDevice.h"
 #include "lvk/metal/MetalMappings.h"
+#include "lvk/metal/MetalStagingDevice.h"
 
 #include <cstdio>
 #include <cstring>
@@ -54,6 +54,7 @@ MTL::PixelFormat toSrgb(MTL::PixelFormat f) {
 MetalContext::~MetalContext() {
   if (immediate_)
     immediate_->waitAll();
+  waitDeferredTasks();
   if (metalLayer_)
     metalLayer_->release();
 }
@@ -224,6 +225,27 @@ void MetalContext::flushResidency() {
   }
 }
 
+void MetalContext::deferredTask(std::function<void()>&& task) {
+  deferredTasks_.push_back({std::move(task), SubmitHandle()});
+}
+
+void MetalContext::processDeferredTasks() {
+  std::vector<DeferredTask>::iterator it = deferredTasks_.begin();
+  while (it != deferredTasks_.end() && !it->handle_.empty() && immediate_->isReady(it->handle_)) {
+    it->task_();
+    ++it;
+  }
+  deferredTasks_.erase(deferredTasks_.begin(), it);
+}
+
+void MetalContext::waitDeferredTasks() {
+  for (DeferredTask& t : deferredTasks_) {
+    immediate_->wait(t.handle_);
+    t.task_();
+  }
+  deferredTasks_.clear();
+}
+
 void MetalContext::rebindArgumentTableHeaps() {
   for (MetalArgumentTable& at : argumentTables_.objects_) {
     if (!at.table)
@@ -373,6 +395,13 @@ SubmitHandle MetalContext::submit(lvk::ICommandBuffer&, TextureHandle present) {
   currentWrapper_ = nullptr;
   framePool_->release();
   framePool_ = nullptr;
+
+  for (DeferredTask& t : deferredTasks_) {
+    if (t.handle_.empty())
+      t.handle_ = handle;
+  }
+  processDeferredTasks();
+
   return handle;
 }
 
@@ -426,7 +455,8 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
   addResident(texture.get());
 
   if (desc.data) {
-    staging_->uploadTexture(texture.get(), desc.dimensions.width, desc.dimensions.height, 0, 0, desc.data);
+    const uint32_t depth = desc.type == TextureType_3D ? desc.dimensions.depth : 1;
+    staging_->uploadTexture(texture.get(), 0, 0, 0, desc.dimensions.width, desc.dimensions.height, depth, 0, 0, desc.data, 0);
   }
 
   const MTL::ResourceID rid = texture->gpuResourceID();
@@ -690,29 +720,47 @@ Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTabl
 }
 
 void MetalContext::destroy(RenderPipelineHandle handle) {
-  renderPipelines_.destroy(handle);
+  if (!renderPipelines_.get(handle))
+    return;
+  deferredTask([this, handle]() { renderPipelines_.destroy(handle); });
 }
 void MetalContext::destroy(ComputePipelineHandle handle) {
-  computePipelines_.destroy(handle);
+  if (!computePipelines_.get(handle))
+    return;
+  deferredTask([this, handle]() { computePipelines_.destroy(handle); });
 }
 void MetalContext::destroy(ShaderModuleHandle handle) {
-  shaderModules_.destroy(handle);
+  if (!shaderModules_.get(handle))
+    return;
+  deferredTask([this, handle]() { shaderModules_.destroy(handle); });
 }
 void MetalContext::destroy(SamplerHandle handle) {
-  samplers_.destroy(handle);
+  if (!samplers_.get(handle))
+    return;
+  deferredTask([this, handle]() { samplers_.destroy(handle); });
 }
 void MetalContext::destroy(BufferHandle handle) {
-  if (const MetalBuffer* mb = buffers_.get(handle))
-    removeResident(mb->buffer.get());
-  buffers_.destroy(handle);
+  if (!buffers_.get(handle))
+    return;
+  deferredTask([this, handle]() {
+    if (const MetalBuffer* mb = buffers_.get(handle))
+      removeResident(mb->buffer.get());
+    buffers_.destroy(handle);
+  });
 }
 void MetalContext::destroy(TextureHandle handle) {
-  if (const MetalImage* img = textures_.get(handle))
-    removeResident(img->texture.get());
-  textures_.destroy(handle);
+  if (!textures_.get(handle))
+    return;
+  deferredTask([this, handle]() {
+    if (const MetalImage* img = textures_.get(handle))
+      removeResident(img->texture.get());
+    textures_.destroy(handle);
+  });
 }
 void MetalContext::destroy(ArgumentTableHandle handle) {
-  argumentTables_.destroy(handle);
+  if (!argumentTables_.get(handle))
+    return;
+  deferredTask([this, handle]() { argumentTables_.destroy(handle); });
 }
 
 bool MetalContext::startGpuCapture(const char* outputPath) {
@@ -793,15 +841,29 @@ Result MetalContext::upload(TextureHandle handle, const TextureRangeDesc& range,
   MetalImage* img = textures_.get(handle);
   if (!img || !img->texture)
     return Result(Result::Code::ArgumentOutOfRange, "invalid texture");
+  const bool is3D = img->texture->textureType() == MTL::TextureType3D;
+  const uint32_t depth = is3D ? range.dimensions.depth : 1;
+  const uint32_t z = is3D ? uint32_t(range.offset.z) : 0;
+  const uint32_t slice = is3D ? 0 : range.layer;
   if (img->texture->storageMode() == MTL::StorageModePrivate) {
-    staging_->uploadTexture(img->texture.get(), range.dimensions.width, range.dimensions.height, range.layer, range.mipLevel, data);
+    staging_->uploadTexture(img->texture.get(),
+                            uint32_t(range.offset.x),
+                            uint32_t(range.offset.y),
+                            z,
+                            range.dimensions.width,
+                            range.dimensions.height,
+                            depth,
+                            slice,
+                            range.mipLevel,
+                            data,
+                            bufferRowLength);
     return Result();
   }
   const NS::UInteger bpp = bytesPerMetalPixel(img->texture->pixelFormat());
   const NS::UInteger bytesPerRow = NS::UInteger(bufferRowLength ? bufferRowLength : range.dimensions.width) * bpp;
-  const MTL::Region region(
-      uint32_t(range.offset.x), uint32_t(range.offset.y), range.dimensions.width, range.dimensions.height);
-  img->texture->replaceRegion(region, range.mipLevel, range.layer, data, bytesPerRow, 0);
+  const NS::UInteger bytesPerImage = is3D ? bytesPerRow * range.dimensions.height : 0;
+  const MTL::Region region(uint32_t(range.offset.x), uint32_t(range.offset.y), z, range.dimensions.width, range.dimensions.height, depth);
+  img->texture->replaceRegion(region, range.mipLevel, slice, data, bytesPerRow, bytesPerImage);
   return Result();
 }
 
@@ -921,7 +983,9 @@ void MetalContext::recreateSwapchain(int newWidth, int newHeight) {
     metalLayer_->setDrawableSize(CGSizeMake(newWidth, newHeight));
 }
 
-void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const lvk::Framebuffer& framebuffer, const lvk::Dependencies& deps) {
+void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
+                                      const lvk::Framebuffer& framebuffer,
+                                      const lvk::Dependencies& deps) {
   endComputeEncoder();
 
   NS::SharedPtr<MTL4::RenderPassDescriptor> rpd = ns::make<MTL4::RenderPassDescriptor>();
@@ -1024,8 +1088,6 @@ void CommandBuffer::cmdBindComputePipeline(ComputePipelineHandle handle) {
     return;
   if (!computeEncoder_) {
     computeEncoder_ = ctx_->commandBuffer()->computeCommandEncoder();
-    // computeEncoder_->barrierAfterQueueStages(
-    //     MTL::StageVertex | MTL::StageFragment | MTL::StageBlit, MTL::StageDispatch, MTL4::VisibilityOptionDevice);
     bindArgumentTableInternal(ctx_->defaultArgumentTable());
   }
   computeEncoder_->setComputePipelineState(p->pipeline.get());
@@ -1158,8 +1220,7 @@ std::unique_ptr<IMetalContext> createContextWithMetalLayer(CA::MetalLayer* layer
                                                            uint32_t width,
                                                            uint32_t height,
                                                            const ContextConfig& config) {
-  std::unique_ptr<MetalContext> ctx =
-      config.validation ? std::make_unique<MetalValidatedContext>() : std::make_unique<MetalContext>();
+  std::unique_ptr<MetalContext> ctx = config.validation ? std::make_unique<MetalValidatedContext>() : std::make_unique<MetalContext>();
   if (!ctx->initialize(layer, width, height, config))
     return nullptr;
   return ctx;
@@ -1182,9 +1243,8 @@ void MetalValidatedCommandBuffer::cmdBeginRendering(const lvk::RenderPass& rende
                                                     const Dependencies& deps) {
   const uint32_t maxColor = context()->limits().maxColorRenderTargetsPerRenderPass;
   if (desc.getNumColorAttachments() > maxColor) {
-    LLOGW("validation: cmdBeginRendering uses %u color attachments but the GPU supports at most %u",
-          desc.getNumColorAttachments(),
-          maxColor);
+    LLOGW(
+        "validation: cmdBeginRendering uses %u color attachments but the GPU supports at most %u", desc.getNumColorAttachments(), maxColor);
   }
   CommandBuffer::cmdBeginRendering(renderPass, desc, deps);
 }

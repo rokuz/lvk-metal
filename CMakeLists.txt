@@ -30,8 +30,8 @@ if(LVK_METAL_LVK_DIR STREQUAL LVK_METAL_BUNDLED_LVK_DIR)
   if(NOT EXISTS "${LVK_METAL_LVK_DIR}/CMakeLists.txt")
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     message(STATUS "lvk-metal: fetching dependencies via bootstrap.py")
-    execute_process(COMMAND "${Python3_EXECUTABLE}" "${LVK_METAL_ROOT}/bootstrap.py" --use-unzip WORKING_DIRECTORY "${LVK_METAL_ROOT}/3party"
-                                                                                                       COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${LVK_METAL_ROOT}/bootstrap.py" --use-unzip
+                    WORKING_DIRECTORY "${LVK_METAL_ROOT}/3party" COMMAND_ERROR_IS_FATAL ANY)
   endif()
   set(LVK_WITH_SAMPLES OFF CACHE BOOL "" FORCE)
   set(LVK_WITH_TRACY OFF CACHE BOOL "" FORCE)
@@ -51,9 +51,7 @@ add_subdirectory(lvk)
 
 function(lvk_metal_target_add_common target)
   target_sources(${target} PRIVATE "${LVK_METAL_ROOT}/samples/common/app_common.cpp")
-  target_include_directories(${target} PRIVATE
-    "${LVK_METAL_ROOT}/samples/common"
-    "${LVK_METAL_LVK_DIR}/third-party/deps/src/stb")
+  target_include_directories(${target} PRIVATE "${LVK_METAL_ROOT}/samples/common" "${LVK_METAL_LVK_DIR}/third-party/deps/src/stb")
 endfunction()
 
 function(lvk_metal_target_use_slang target shaders_dir)
@@ -68,10 +66,8 @@ function(lvk_metal_target_use_slang target shaders_dir)
   target_sources(${target} PRIVATE "${LVK_METAL_ROOT}/samples/common/slang_runtime.cpp")
   target_include_directories(${target} PRIVATE "${_slang_dir}/include" "${LVK_METAL_ROOT}/samples/common")
   target_link_libraries(${target} PRIVATE "${LVK_METAL_SLANG_LIB}")
-  target_compile_definitions(${target} PRIVATE
-    LVK_METAL_SAMPLE_USE_SLANG=1
-    "LVK_METAL_SAMPLE_SHADERS_DIR=\"${shaders_dir}\""
-    "LVK_METAL_SAMPLE_COMMON_DIR=\"${LVK_METAL_ROOT}/samples/common\"")
+  target_compile_definitions(${target} PRIVATE LVK_METAL_SAMPLE_USE_SLANG=1 "LVK_METAL_SAMPLE_SHADERS_DIR=\"${shaders_dir}\""
+                                               "LVK_METAL_SAMPLE_COMMON_DIR=\"${LVK_METAL_ROOT}/samples/common\"")
   set_target_properties(${target} PROPERTIES BUILD_RPATH "${_slang_dir}/lib")
 endfunction()
 

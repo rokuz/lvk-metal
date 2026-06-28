@@ -17,11 +17,7 @@ namespace lvk::metal {
 class ImGuiRenderer {
  public:
   explicit ImGuiRenderer(lvk::IContext& ctx, GLFWwindow* window, const char* defaultFontTTF = nullptr, float fontSizePixels = 24.0f);
-  explicit ImGuiRenderer(lvk::IContext& ctx,
-                         GLFWwindow* window,
-                         const void* fontData,
-                         size_t fontDataSize,
-                         float fontSizePixels = 24.0f);
+  explicit ImGuiRenderer(lvk::IContext& ctx, GLFWwindow* window, const void* fontData, size_t fontDataSize, float fontSizePixels = 24.0f);
   ~ImGuiRenderer();
 
   ImGuiRenderer(const ImGuiRenderer&) = delete;

@@ -26,11 +26,11 @@
 #include <taskflow/taskflow.hpp>
 
 #include <shared/Bitmap.h>
-#include <shared/UtilsCubemap.h>
 #include <shared/Camera.h>
+#include <shared/UtilsCubemap.h>
 
-#include <lvk/LVK-Metal.h>
 #include <lvk/HelpersImGuiMetal.h>
+#include <lvk/LVK-Metal.h>
 
 #include "app_common.h"
 
@@ -345,10 +345,8 @@ class Bistro final : public lvk::metal::ISample {
       });
     }
 
-    sampler_ = ctx.createSampler({.mipMap = lvk::SamplerMip_Linear,
-                                  .wrapU = lvk::SamplerWrap_Repeat,
-                                  .wrapV = lvk::SamplerWrap_Repeat,
-                                  .debugName = "linear"});
+    sampler_ = ctx.createSampler(
+        {.mipMap = lvk::SamplerMip_Linear, .wrapU = lvk::SamplerWrap_Repeat, .wrapV = lvk::SamplerWrap_Repeat, .debugName = "linear"});
     samplerShadow_ = ctx.createSampler({.wrapU = lvk::SamplerWrap_Clamp,
                                         .wrapV = lvk::SamplerWrap_Clamp,
                                         .depthCompareOp = lvk::CompareOp_LessEqual,
@@ -454,11 +452,10 @@ class Bistro final : public lvk::metal::ISample {
     const ScenePC scenePC = {
         ctx_->gpuAddress(ubPerFrame_[r]), ctx_->gpuAddress(ubPerObject_[r]), ctx_->gpuAddress(sbMaterials_), vbAddress_};
 
-    cmd.cmdBeginRendering(
-        {.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}},
-         .depth = {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_DontCare, .clearDepth = 1.0f}},
-        {.color = {{.texture = offscreenColor_}}, .depthStencil = {.texture = offscreenDepth_}},
-        {.sampledImages = {shadowMap_}});
+    cmd.cmdBeginRendering({.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}},
+                           .depth = {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_DontCare, .clearDepth = 1.0f}},
+                          {.color = {{.texture = offscreenColor_}}, .depthStencil = {.texture = offscreenDepth_}},
+                          {.sampledImages = {shadowMap_}});
     cmd.cmdBindViewport({.x = 0, .y = 0, .width = float(width_), .height = float(height_)});
     cmd.cmdBindScissorRect({.x = 0, .y = 0, .width = width_, .height = height_});
 
@@ -494,23 +491,24 @@ class Bistro final : public lvk::metal::ISample {
     }
 
     const lvk::Framebuffer fbMain = {.color = {{.texture = target}}};
-    // imgui_->beginFrame(fbMain);
-    // ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    // ImGui::SetNextWindowSize(ImVec2(360, 200), ImGuiCond_FirstUseEver);
-    // ImGui::Begin("Bistro", nullptr, ImGuiWindowFlags_NoNavInputs);
-    // ImGui::Text("W/S/A/D - camera movement");
-    // ImGui::Text("1/2 - camera up/down, Shift - fast");
-    // ImGui::Checkbox("Compute postprocess (C)", &compute_);
-    // ImGui::Checkbox("Draw normals (N)", &drawNormals_);
-    // ImGui::Checkbox("Wireframe (T)", &wireframe_);
-    // const uint32_t remaining = remainingMaterials_.load(std::memory_order_acquire);
-    // if (remaining) {
-    //   ImGui::Separator();
-    //   ImGui::Text("Loading textures: %u left", remaining);
-    // }
-    // ImGui::End();
+    imgui_->beginFrame(fbMain);
+    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360, 200), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Bistro", nullptr, ImGuiWindowFlags_NoNavInputs);
+    ImGui::Text("W/S/A/D - camera movement");
+    ImGui::Text("1/2 - camera up/down, Shift - fast");
+    ImGui::Checkbox("Compute postprocess (C)", &compute_);
+    ImGui::Checkbox("Draw normals (N)", &drawNormals_);
+    ImGui::Checkbox("Wireframe (T)", &wireframe_);
+    const uint32_t remaining = remainingMaterials_.load(std::memory_order_acquire);
+    if (remaining) {
+      ImGui::Separator();
+      ImGui::Text("Loading textures: %u left", remaining);
+    }
+    ImGui::End();
 
-    cmd.cmdBeginRendering({.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}}}, fbMain,
+    cmd.cmdBeginRendering({.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}}},
+                          fbMain,
                           {.sampledImages = {offscreenColor_}});
     cmd.cmdBindViewport({.x = 0, .y = 0, .width = float(width_), .height = float(height_)});
     cmd.cmdBindScissorRect({.x = 0, .y = 0, .width = width_, .height = height_});
@@ -520,7 +518,7 @@ class Bistro final : public lvk::metal::ISample {
     } fsPC = {offscreenColor_.index()};
     cmd.cmdPushConstants(fsPC);
     cmd.cmdDraw(3);
-    //imgui_->endFrame(cmd);
+    imgui_->endFrame(cmd);
     cmd.cmdEndRendering();
   }
 
@@ -545,7 +543,8 @@ class Bistro final : public lvk::metal::ISample {
   static constexpr uint32_t kShadowSize = 4096;
 
   lvk::Holder<lvk::BufferHandle> makeUniform(lvk::metal::IMetalContext& ctx, size_t size, const char* name) {
-    return ctx.createBuffer({.usage = lvk::BufferUsageBits_Storage, .storage = lvk::StorageType_HostVisible, .size = size, .debugName = name});
+    return ctx.createBuffer(
+        {.usage = lvk::BufferUsageBits_Storage, .storage = lvk::StorageType_HostVisible, .size = size, .debugName = name});
   }
 
   void createShadowMap(lvk::metal::IMetalContext& ctx) {
@@ -715,7 +714,8 @@ class Bistro final : public lvk::metal::ISample {
     {
       const size_t indexCount = vertexData_.size();
       std::vector<uint32_t> remap(indexCount);
-      const size_t vcount = meshopt_generateVertexRemap(remap.data(), nullptr, indexCount, vertexData_.data(), indexCount, sizeof(VertexData));
+      const size_t vcount =
+          meshopt_generateVertexRemap(remap.data(), nullptr, indexCount, vertexData_.data(), indexCount, sizeof(VertexData));
       std::vector<VertexData> remapped(vcount);
       indexData_.resize(indexCount);
       meshopt_remapIndexBuffer(indexData_.data(), nullptr, indexCount, remap.data());
@@ -931,18 +931,42 @@ class Bistro final : public lvk::metal::ISample {
     const bool pressed = action != GLFW_RELEASE;
     CameraPositioner_FirstPerson::Movement& m = self->positioner_.movement_;
     switch (key) {
-    case GLFW_KEY_W: m.forward_ = pressed; break;
-    case GLFW_KEY_S: m.backward_ = pressed; break;
-    case GLFW_KEY_A: m.left_ = pressed; break;
-    case GLFW_KEY_D: m.right_ = pressed; break;
-    case GLFW_KEY_1: m.up_ = pressed; break;
-    case GLFW_KEY_2: m.down_ = pressed; break;
+    case GLFW_KEY_W:
+      m.forward_ = pressed;
+      break;
+    case GLFW_KEY_S:
+      m.backward_ = pressed;
+      break;
+    case GLFW_KEY_A:
+      m.left_ = pressed;
+      break;
+    case GLFW_KEY_D:
+      m.right_ = pressed;
+      break;
+    case GLFW_KEY_1:
+      m.up_ = pressed;
+      break;
+    case GLFW_KEY_2:
+      m.down_ = pressed;
+      break;
     case GLFW_KEY_LEFT_SHIFT:
-    case GLFW_KEY_RIGHT_SHIFT: m.fastSpeed_ = pressed; break;
-    case GLFW_KEY_C: if (action == GLFW_PRESS) self->compute_ = !self->compute_; break;
-    case GLFW_KEY_N: if (action == GLFW_PRESS) self->drawNormals_ = !self->drawNormals_; break;
-    case GLFW_KEY_T: if (action == GLFW_PRESS) self->wireframe_ = !self->wireframe_; break;
-    default: break;
+    case GLFW_KEY_RIGHT_SHIFT:
+      m.fastSpeed_ = pressed;
+      break;
+    case GLFW_KEY_C:
+      if (action == GLFW_PRESS)
+        self->compute_ = !self->compute_;
+      break;
+    case GLFW_KEY_N:
+      if (action == GLFW_PRESS)
+        self->drawNormals_ = !self->drawNormals_;
+      break;
+    case GLFW_KEY_T:
+      if (action == GLFW_PRESS)
+        self->wireframe_ = !self->wireframe_;
+      break;
+    default:
+      break;
     }
   }
   static void mouseButtonCallback(GLFWwindow* window, int button, int action, int) {

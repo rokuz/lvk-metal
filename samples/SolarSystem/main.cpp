@@ -1,8 +1,8 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <algorithm>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -24,12 +24,12 @@
 #include <lmath/GeometryShapes.h>
 #include <lmath/Random.h>
 #include <shared/Bitmap.h>
-#include <shared/UtilsCubemap.h>
 #include <shared/Camera.h>
 #include <shared/Trackball.h>
+#include <shared/UtilsCubemap.h>
 
-#include <lvk/LVK-Metal.h>
 #include <lvk/HelpersImGuiMetal.h>
+#include <lvk/LVK-Metal.h>
 
 #include "app_common.h"
 
@@ -334,8 +334,7 @@ struct OrbitAnimationGroup {
     mat4 transform = mat4(1.0f);
     for (OrbitAnimator& anim : group) {
       anim.update(deltaSeconds);
-      const mat4 translation =
-          anim.orbitalRadius != 0.0f ? glm::translate(mat4(1.0f), vec3(0.0f, anim.orbitalRadius, 0.0f)) : mat4(1.0f);
+      const mat4 translation = anim.orbitalRadius != 0.0f ? glm::translate(mat4(1.0f), vec3(0.0f, anim.orbitalRadius, 0.0f)) : mat4(1.0f);
       transform = translation * anim.transform * transform;
     }
     targetNode->local = transform;
@@ -475,10 +474,9 @@ class SolarSystem final : public lvk::metal::ISample {
     };
 
     const lvk::Framebuffer fb = {.color = {{.texture = target}}, .depthStencil = {.texture = depth_}};
-    cmd.cmdBeginRendering(
-        {.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}},
-         .depth = {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_DontCare, .clearDepth = 1.0f}},
-        fb);
+    cmd.cmdBeginRendering({.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}},
+                           .depth = {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_DontCare, .clearDepth = 1.0f}},
+                          fb);
     cmd.cmdBindViewport({.x = 0.0f, .y = 0.0f, .width = float(width_), .height = float(height_)});
     cmd.cmdBindScissorRect({.x = 0, .y = 0, .width = width_, .height = height_});
 
@@ -901,8 +899,10 @@ class SolarSystem final : public lvk::metal::ISample {
     for (uint32_t i = 0; i < kRing; ++i) {
       bufModel_[i] = ctx.createBuffer(
           {.usage = lvk::BufferUsageBits_Storage, .storage = lvk::StorageType_HostVisible, .size = matBytes, .debugName = "Buffer: model"});
-      bufNormal_[i] = ctx.createBuffer(
-          {.usage = lvk::BufferUsageBits_Storage, .storage = lvk::StorageType_HostVisible, .size = matBytes, .debugName = "Buffer: normal"});
+      bufNormal_[i] = ctx.createBuffer({.usage = lvk::BufferUsageBits_Storage,
+                                        .storage = lvk::StorageType_HostVisible,
+                                        .size = matBytes,
+                                        .debugName = "Buffer: normal"});
       bufPerFrame_[i] = ctx.createBuffer({.usage = lvk::BufferUsageBits_Storage,
                                           .storage = lvk::StorageType_HostVisible,
                                           .size = sizeof(PerFrame) + 16,

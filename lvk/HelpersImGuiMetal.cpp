@@ -2,11 +2,11 @@
 
 #include <lvk/LVK-Metal.h>
 
+#include "imgui/backends/imgui_impl_glfw.cpp"
 #include "imgui/imgui.cpp"
 #include "imgui/imgui_draw.cpp"
 #include "imgui/imgui_tables.cpp"
 #include "imgui/imgui_widgets.cpp"
-#include "imgui/backends/imgui_impl_glfw.cpp"
 
 #include <math.h>
 #include <string.h>
@@ -338,8 +338,7 @@ void ImGuiRenderer::endFrame(lvk::ICommandBuffer& cmd) {
           .samplerId = samplerClamp_.index(),
       };
       cmd.cmdPushConstants(pc);
-      cmd.cmdBindScissorRect(
-          {uint32_t(clipMin.x), uint32_t(clipMin.y), uint32_t(clipMax.x - clipMin.x), uint32_t(clipMax.y - clipMin.y)});
+      cmd.cmdBindScissorRect({uint32_t(clipMin.x), uint32_t(clipMin.y), uint32_t(clipMax.x - clipMin.x), uint32_t(clipMax.y - clipMin.y)});
       cmd.cmdDrawIndexed(cmd_.ElemCount, 1u, idxOffset + cmd_.IdxOffset, int32_t(vtxOffset + cmd_.VtxOffset));
     }
     idxOffset += uint32_t(alignTo4(size_t(cmdList->IdxBuffer.Size) * sizeof(ImDrawIdx)) / sizeof(ImDrawIdx));

@@ -171,8 +171,12 @@ class RenderToCubeMapSinglePass final : public lvk::metal::ISample {
                   {.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .layer = 5, .clearColor = {0.1f, 0.3f, 0.3f, 1.0f}}},
     };
     const lvk::Framebuffer cubeFb = {
-        .color = {{.texture = cubeMap_}, {.texture = cubeMap_}, {.texture = cubeMap_},
-                  {.texture = cubeMap_}, {.texture = cubeMap_}, {.texture = cubeMap_}},
+        .color = {{.texture = cubeMap_},
+                  {.texture = cubeMap_},
+                  {.texture = cubeMap_},
+                  {.texture = cubeMap_},
+                  {.texture = cubeMap_},
+                  {.texture = cubeMap_}},
     };
     cmd.cmdBeginRendering(cubePass, cubeFb);
     cmd.cmdBindRenderPipeline(pipelineTriangle_);

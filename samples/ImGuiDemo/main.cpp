@@ -1,8 +1,8 @@
 #include <cstdint>
 #include <memory>
 
-#include <lvk/LVK-Metal.h>
 #include <lvk/HelpersImGuiMetal.h>
+#include <lvk/LVK-Metal.h>
 
 #include "app_common.h"
 

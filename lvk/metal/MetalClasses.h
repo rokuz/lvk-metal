@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -332,6 +333,9 @@ class MetalContext : public IMetalContext {
   void addResident(const MTL::Allocation* allocation);
   void removeResident(const MTL::Allocation* allocation);
   void flushResidency();
+  void deferredTask(std::function<void()>&& task);
+  void processDeferredTasks();
+  void waitDeferredTasks();
 
   NS::SharedPtr<MTL::Device> device_;
   NS::SharedPtr<MTL4::CommandQueue> commandQueue_;
@@ -375,6 +379,12 @@ class MetalContext : public IMetalContext {
     SubmitHandle handle;
   };
   std::vector<RetiredBuffer> retiredConstantRings_;
+
+  struct DeferredTask {
+    std::function<void()> task_;
+    SubmitHandle handle_;
+  };
+  std::vector<DeferredTask> deferredTasks_;
 
   ldr::Pool<lvk::Buffer, MetalBuffer> buffers_;
   ldr::Pool<lvk::Texture, MetalImage> textures_;

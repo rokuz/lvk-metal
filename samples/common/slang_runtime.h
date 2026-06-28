@@ -7,7 +7,7 @@
 #include <string>
 
 class SlangRuntime {
-public:
+ public:
   explicit SlangRuntime(std::filesystem::path moduleDir) noexcept;
   ~SlangRuntime();
 
@@ -24,7 +24,7 @@ public:
                                                           lvk::ShaderStage stage,
                                                           char const* debugName) noexcept;
 
-private:
+ private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

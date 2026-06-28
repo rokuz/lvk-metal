@@ -38,9 +38,8 @@ int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& samp
 
 } // namespace lvk::metal
 
-#define DESKTOP_MAIN(SampleClass)                                            \
-  int main(int argc, char** argv) {                                          \
-    std::unique_ptr<lvk::metal::ISample> sample =                            \
-        std::make_unique<SampleClass>();                                     \
-    return lvk::metal::run(argc, argv, "[lvk-metal] " #SampleClass, sample); \
+#define DESKTOP_MAIN(SampleClass)                                                  \
+  int main(int argc, char** argv) {                                                \
+    std::unique_ptr<lvk::metal::ISample> sample = std::make_unique<SampleClass>(); \
+    return lvk::metal::run(argc, argv, "[lvk-metal] " #SampleClass, sample);       \
   }

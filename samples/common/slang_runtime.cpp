@@ -16,7 +16,7 @@ void logDiagnostics(slang::IBlob* diag, char const* context) {
   if (diag && diag->getBufferSize() > 0)
     LLOGE("Slang [%s]: %s", context, static_cast<char const*>(diag->getBufferPointer()));
 }
-}
+} // namespace
 
 SlangRuntime::SlangRuntime(std::filesystem::path moduleDir) noexcept {
   std::unique_ptr<Impl> impl = std::make_unique<Impl>();
@@ -78,8 +78,7 @@ std::string SlangRuntime::compileToMSL(char const* moduleName, char const* entry
 
   slang::IComponentType* components[] = {module, ep.get()};
   Slang::ComPtr<slang::IComponentType> composite;
-  if (SLANG_FAILED(impl_->session->createCompositeComponentType(components, 2, composite.writeRef(), diag.writeRef())) ||
-      !composite) {
+  if (SLANG_FAILED(impl_->session->createCompositeComponentType(components, 2, composite.writeRef(), diag.writeRef())) || !composite) {
     logDiagnostics(diag, "compose");
     return {};
   }
