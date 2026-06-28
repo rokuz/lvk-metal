@@ -199,6 +199,29 @@ inline MTL::CompareFunction toMTLCompareFunction(CompareOp op) {
   }
 }
 
+inline MTL::StencilOperation toMTLStencilOperation(StencilOp op) {
+  switch (op) {
+  case StencilOp_Keep:
+    return MTL::StencilOperationKeep;
+  case StencilOp_Zero:
+    return MTL::StencilOperationZero;
+  case StencilOp_Replace:
+    return MTL::StencilOperationReplace;
+  case StencilOp_IncrementClamp:
+    return MTL::StencilOperationIncrementClamp;
+  case StencilOp_DecrementClamp:
+    return MTL::StencilOperationDecrementClamp;
+  case StencilOp_Invert:
+    return MTL::StencilOperationInvert;
+  case StencilOp_IncrementWrap:
+    return MTL::StencilOperationIncrementWrap;
+  case StencilOp_DecrementWrap:
+    return MTL::StencilOperationDecrementWrap;
+  default:
+    return MTL::StencilOperationKeep;
+  }
+}
+
 inline MTL::SamplerMinMagFilter toMTLSamplerFilter(SamplerFilter f) {
   return f == SamplerFilter_Nearest ? MTL::SamplerMinMagFilterNearest : MTL::SamplerMinMagFilterLinear;
 }

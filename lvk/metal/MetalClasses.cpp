@@ -35,6 +35,19 @@ MTL::StoreAction toStoreAction(lvk::StoreOp op) {
   }
 }
 
+bool formatHasStencil(MTL::PixelFormat f) {
+  switch (f) {
+  case MTL::PixelFormatStencil8:
+  case MTL::PixelFormatDepth24Unorm_Stencil8:
+  case MTL::PixelFormatDepth32Float_Stencil8:
+  case MTL::PixelFormatX24_Stencil8:
+  case MTL::PixelFormatX32_Stencil8:
+    return true;
+  default:
+    return false;
+  }
+}
+
 MTL::PixelFormat toSrgb(MTL::PixelFormat f) {
   switch (f) {
   case MTL::PixelFormatBGRA8Unorm:
@@ -675,6 +688,8 @@ Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipe
   mp.cullMode = toMTLCullMode(desc.cullMode);
   mp.frontFace = toMTLWinding(desc.frontFace);
   mp.fillMode = toMTLFillMode(desc.polygonMode);
+  mp.frontStencil = desc.frontFaceStencil;
+  mp.backStencil = desc.backFaceStencil;
   return {this, renderPipelines_.create(std::move(mp))};
 }
 
@@ -949,17 +964,61 @@ MTL::GPUAddress MetalContext::writePushConstants(const void* data, size_t size, 
   return constantsRing_->gpuAddress() + slot;
 }
 
-NS::SharedPtr<MTL::DepthStencilState> MetalContext::makeDepthStencilState(const DepthState& state) {
+NS::SharedPtr<MTL::DepthStencilState> MetalContext::makeDepthStencilState(const DepthState& depth,
+                                                                          const StencilState& front,
+                                                                          const StencilState& back) {
   NS::SharedPtr<MTL::DepthStencilDescriptor> dsd = ns::make<MTL::DepthStencilDescriptor>();
-  dsd->setDepthCompareFunction(toMTLCompareFunction(state.compareOp));
-  dsd->setDepthWriteEnabled(state.isDepthWriteEnabled);
+  dsd->setDepthCompareFunction(toMTLCompareFunction(depth.compareOp));
+  dsd->setDepthWriteEnabled(depth.isDepthWriteEnabled);
+
+  const auto fillStencil = [](MTL::StencilDescriptor* sd, const StencilState& s) {
+    sd->setStencilCompareFunction(toMTLCompareFunction(s.stencilCompareOp));
+    sd->setStencilFailureOperation(toMTLStencilOperation(s.stencilFailureOp));
+    sd->setDepthFailureOperation(toMTLStencilOperation(s.depthFailureOp));
+    sd->setDepthStencilPassOperation(toMTLStencilOperation(s.depthStencilPassOp));
+    sd->setReadMask(s.readMask);
+    sd->setWriteMask(s.writeMask);
+  };
+  NS::SharedPtr<MTL::StencilDescriptor> f = ns::make<MTL::StencilDescriptor>();
+  fillStencil(f.get(), front);
+  dsd->setFrontFaceStencil(f.get());
+  NS::SharedPtr<MTL::StencilDescriptor> b = ns::make<MTL::StencilDescriptor>();
+  fillStencil(b.get(), back);
+  dsd->setBackFaceStencil(b.get());
+
   return NS::TransferPtr(device_->newDepthStencilState(dsd.get()));
+}
+
+MTL::DepthStencilState* MetalContext::getDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back) {
+  const DepthStencilStateKey key = {
+      .depthCompareOp = uint32_t(depth.compareOp),
+      .depthWriteEnabled = uint32_t(depth.isDepthWriteEnabled),
+      .frontStencilFailureOp = uint32_t(front.stencilFailureOp),
+      .frontDepthFailureOp = uint32_t(front.depthFailureOp),
+      .frontDepthStencilPassOp = uint32_t(front.depthStencilPassOp),
+      .frontStencilCompareOp = uint32_t(front.stencilCompareOp),
+      .frontReadMask = front.readMask,
+      .frontWriteMask = front.writeMask,
+      .backStencilFailureOp = uint32_t(back.stencilFailureOp),
+      .backDepthFailureOp = uint32_t(back.depthFailureOp),
+      .backDepthStencilPassOp = uint32_t(back.depthStencilPassOp),
+      .backStencilCompareOp = uint32_t(back.stencilCompareOp),
+      .backReadMask = back.readMask,
+      .backWriteMask = back.writeMask,
+  };
+  const auto it = depthStencilCache_.find(key);
+  if (it != depthStencilCache_.end())
+    return it->second.get();
+  NS::SharedPtr<MTL::DepthStencilState> dss = makeDepthStencilState(depth, front, back);
+  MTL::DepthStencilState* raw = dss.get();
+  depthStencilCache_[key] = std::move(dss);
+  return raw;
 }
 
 TextureHandle MetalContext::getCurrentSwapchainTexture() {
   if (!currentDrawable_) {
     CA::MetalDrawable* drawable = metalLayer_->nextDrawable();
-    if (!LVK_VERIFY(drawable))
+    if (!drawable)
       return {};
     currentDrawable_ = drawable;
     currentDrawable_->retain();
@@ -1018,6 +1077,15 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
     att->setLoadAction(toLoadAction(renderPass.depth.loadOp));
     att->setStoreAction(toStoreAction(renderPass.depth.storeOp));
     att->setClearDepth(renderPass.depth.clearDepth);
+    if (formatHasStencil(img->format)) {
+      MTL::RenderPassStencilAttachmentDescriptor* satt = rpd->stencilAttachment();
+      satt->setTexture(img->texture.get());
+      satt->setSlice(renderPass.stencil.layer);
+      satt->setLevel(renderPass.stencil.level);
+      satt->setLoadAction(toLoadAction(renderPass.stencil.loadOp));
+      satt->setStoreAction(toStoreAction(renderPass.stencil.storeOp));
+      satt->setClearStencil(renderPass.stencil.clearStencil);
+    }
     rtWidth = img->width;
     rtHeight = img->height;
   }
@@ -1026,6 +1094,9 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
   rpd->setRenderTargetHeight(rtHeight);
 
   encoder_ = ctx_->commandBuffer()->renderCommandEncoder(rpd.get());
+  depthStencilDirty_ = true;
+  lastDepthStencilState_ = nullptr;
+  encoder_->setStencilReferenceValue(stencilRef_);
 
   const MTL::Stages shaderReadStages = MTL::StageVertex | MTL::StageFragment;
   if (!deps.sampledImages.empty()) {
@@ -1065,6 +1136,9 @@ void CommandBuffer::cmdBindRenderPipeline(RenderPipelineHandle handle) {
   encoder_->setFrontFacingWinding(p->frontFace);
   encoder_->setTriangleFillMode(p->fillMode);
   topology_ = p->topology;
+  frontStencil_ = p->frontStencil;
+  backStencil_ = p->backStencil;
+  depthStencilDirty_ = true;
 }
 
 void CommandBuffer::endComputeEncoder() {
@@ -1112,11 +1186,25 @@ void CommandBuffer::cmdDispatchIndirect(BufferHandle indirectBuffer, size_t indi
 }
 
 void CommandBuffer::cmdBindDepthState(const DepthState& state) {
-  if (!encoder_)
+  depthState_ = state;
+  depthStencilDirty_ = true;
+}
+
+void CommandBuffer::cmdSetStencilRef(uint32_t ref) {
+  stencilRef_ = ref;
+  if (encoder_)
+    encoder_->setStencilReferenceValue(ref);
+}
+
+void CommandBuffer::applyDepthStencilState() {
+  if (!encoder_ || !depthStencilDirty_)
     return;
-  NS::SharedPtr<MTL::DepthStencilState> dss = ctx_->makeDepthStencilState(state);
-  if (dss)
-    encoder_->setDepthStencilState(dss.get());
+  MTL::DepthStencilState* dss = ctx_->getDepthStencilState(depthState_, frontStencil_, backStencil_);
+  if (dss && dss != lastDepthStencilState_) {
+    encoder_->setDepthStencilState(dss);
+    lastDepthStencilState_ = dss;
+  }
+  depthStencilDirty_ = false;
 }
 
 void CommandBuffer::bindArgumentTableInternal(ArgumentTableHandle handle) {
@@ -1174,6 +1262,7 @@ void CommandBuffer::cmdPushConstants(const void* data, size_t size, size_t offse
 }
 
 void CommandBuffer::cmdDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t baseInstance) {
+  applyDepthStencilState();
   encoder_->drawPrimitives(topology_, firstVertex, vertexCount, instanceCount, baseInstance);
   resetArgumentTableIfOverridden();
 }
@@ -1183,6 +1272,7 @@ void CommandBuffer::cmdDrawIndexed(uint32_t indexCount,
                                    uint32_t firstIndex,
                                    int32_t vertexOffset,
                                    uint32_t baseInstance) {
+  applyDepthStencilState();
   const MetalBuffer* ib = ctx_->getBuffer(boundIndexBuffer_);
   if (!ib || !ib->buffer)
     return;

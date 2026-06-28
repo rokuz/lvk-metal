@@ -63,6 +63,7 @@ struct ArgumentTableDesc {
 class IMetalCommandBuffer : public lvk::ICommandBuffer {
  public:
   virtual void cmdBindArgumentTable(ArgumentTableHandle handle) = 0;
+  virtual void cmdSetStencilRef(uint32_t ref) = 0;
 };
 
 class IMetalContext : public lvk::IContext {

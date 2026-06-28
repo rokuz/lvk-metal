@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <ldrutils/lutils/Pool.h>
@@ -43,6 +45,8 @@ struct MetalRenderPipeline {
   MTL::CullMode cullMode = MTL::CullModeNone;
   MTL::Winding frontFace = MTL::WindingCounterClockwise;
   MTL::TriangleFillMode fillMode = MTL::TriangleFillModeFill;
+  StencilState frontStencil = {};
+  StencilState backStencil = {};
 };
 
 struct MetalComputePipeline {
@@ -55,6 +59,38 @@ struct MetalArgumentTable {
   uint32_t constantsIndex = UINT32_MAX;
   ArgumentKind kinds[ArgumentTableDesc::kMaxBindings] = {};
   uint32_t numKinds = 0;
+};
+
+struct DepthStencilStateKey {
+  uint32_t depthCompareOp = 0;
+  uint32_t depthWriteEnabled = 0;
+  uint32_t frontStencilFailureOp = 0;
+  uint32_t frontDepthFailureOp = 0;
+  uint32_t frontDepthStencilPassOp = 0;
+  uint32_t frontStencilCompareOp = 0;
+  uint32_t frontReadMask = 0;
+  uint32_t frontWriteMask = 0;
+  uint32_t backStencilFailureOp = 0;
+  uint32_t backDepthFailureOp = 0;
+  uint32_t backDepthStencilPassOp = 0;
+  uint32_t backStencilCompareOp = 0;
+  uint32_t backReadMask = 0;
+  uint32_t backWriteMask = 0;
+
+  bool operator==(const DepthStencilStateKey& o) const {
+    return std::memcmp(this, &o, sizeof(o)) == 0;
+  }
+};
+
+struct DepthStencilStateKeyHash {
+  size_t operator()(const DepthStencilStateKey& k) const {
+    size_t h = 1469598103934665603ull;
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&k);
+    for (size_t i = 0; i < sizeof(k); ++i) {
+      h = (h ^ bytes[i]) * 1099511628211ull;
+    }
+    return h;
+  }
 };
 
 class MetalContext;
@@ -89,6 +125,7 @@ class CommandBuffer : public IMetalCommandBuffer {
 
   void cmdBindRenderPipeline(lvk::RenderPipelineHandle handle) override;
   void cmdBindDepthState(const DepthState& state) override;
+  void cmdSetStencilRef(uint32_t ref) override;
 
   void cmdBindVertexBuffer(uint32_t index, BufferHandle buffer, uint64_t bufferOffset = 0, uint64_t bufferSize = LVK_WHOLE_SIZE) override {}
   void cmdBindIndexBuffer(BufferHandle indexBuffer,
@@ -158,6 +195,7 @@ class CommandBuffer : public IMetalCommandBuffer {
   void resetArgumentTableIfOverridden();
   void setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table);
   void endComputeEncoder();
+  void applyDepthStencilState();
 
   MetalContext* ctx_ = nullptr;
   MTL4::RenderCommandEncoder* encoder_ = nullptr;
@@ -170,6 +208,12 @@ class CommandBuffer : public IMetalCommandBuffer {
   BufferHandle boundIndexBuffer_;
   MTL::IndexType boundIndexType_ = MTL::IndexTypeUInt32;
   uint64_t boundIndexOffset_ = 0;
+  DepthState depthState_ = {};
+  StencilState frontStencil_ = {};
+  StencilState backStencil_ = {};
+  bool depthStencilDirty_ = true;
+  MTL::DepthStencilState* lastDepthStencilState_ = nullptr;
+  uint32_t stencilRef_ = 0;
 };
 
 class MetalContext : public IMetalContext {
@@ -319,9 +363,11 @@ class MetalContext : public IMetalContext {
     return defaultArgumentTable_;
   }
   MTL::GPUAddress writePushConstants(const void* data, size_t size, size_t offset);
-  NS::SharedPtr<MTL::DepthStencilState> makeDepthStencilState(const DepthState& state);
+  MTL::DepthStencilState* getDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
 
  private:
+  NS::SharedPtr<MTL::DepthStencilState> makeDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
+
   [[nodiscard]] bool createDevice();
   [[nodiscard]] bool createQueue();
   [[nodiscard]] bool createBindlessHeaps();
@@ -385,6 +431,8 @@ class MetalContext : public IMetalContext {
     SubmitHandle handle_;
   };
   std::vector<DeferredTask> deferredTasks_;
+
+  std::unordered_map<DepthStencilStateKey, NS::SharedPtr<MTL::DepthStencilState>, DepthStencilStateKeyHash> depthStencilCache_;
 
   ldr::Pool<lvk::Buffer, MetalBuffer> buffers_;
   ldr::Pool<lvk::Texture, MetalImage> textures_;
