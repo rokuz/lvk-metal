@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "lvk/LVK-Metal.h"
 #include "lvk/metal/Common.h"
 
@@ -17,6 +19,7 @@ class MetalImmediateCommands {
     uint32_t bufferIndex = 0;
     bool isEncoding = false;
     bool isPending = false;
+    bool isDeferred = false;
   };
 
   MetalImmediateCommands(MTL::Device* device, MTL4::CommandQueue* queue, const char* debugName);
@@ -26,6 +29,11 @@ class MetalImmediateCommands {
 
   const CommandBufferWrapper& acquire();
   SubmitHandle submit(const CommandBufferWrapper& wrapper);
+  SubmitHandle submitDeferred(const CommandBufferWrapper& wrapper);
+  void flushDeferred();
+  [[nodiscard]] bool hasDeferred() const {
+    return !deferred_.empty();
+  }
   void wait(SubmitHandle handle);
   void waitAll();
   [[nodiscard]] bool isReady(SubmitHandle handle) const;
@@ -48,6 +56,7 @@ class MetalImmediateCommands {
   const char* debugName_ = "";
 
   CommandBufferWrapper buffers_[kMaxCommandBuffers];
+  std::vector<uint32_t> deferred_;
   SubmitHandle lastSubmitHandle_;
   SubmitHandle nextSubmitHandle_;
   uint32_t numAvailable_ = kMaxCommandBuffers;

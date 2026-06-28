@@ -25,6 +25,8 @@ AppConfig parseAppConfig(int argc, char** argv) {
       cfg.screenshotFile = argv[++i];
     } else if (arg == "--screenshot-frame" && i + 1 < argc) {
       cfg.screenshotFrame = std::atoi(argv[++i]);
+    } else if (arg == "--frames" && i + 1 < argc) {
+      cfg.numFrames = std::atoi(argv[++i]);
     } else if (arg == "--width" && i + 1 < argc) {
       cfg.width = std::atoi(argv[++i]);
     } else if (arg == "--height" && i + 1 < argc) {
@@ -100,14 +102,19 @@ int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& samp
   int exitCode = 0;
   if (app.screenshot()) {
     const char* gpuCapturePath = getenv("LVKM_GPU_CAPTURE");
-    if (gpuCapturePath)
-      ctx->startGpuCapture(gpuCapturePath);
-    const float time = float(app.screenshotFrame) / 60.0f;
-    lvk::ICommandBuffer& cmd = ctx->acquireCommandBuffer();
-    const lvk::TextureHandle swapchain = ctx->getCurrentSwapchainTexture();
-    sample->render(cmd, swapchain, time);
-    const lvk::SubmitHandle handle = ctx->submit(cmd, {});
-    ctx->wait(handle);
+    const int numFrames = app.numFrames > 1 ? app.numFrames : 1;
+    lvk::TextureHandle swapchain;
+    for (int f = 1; f <= numFrames; ++f) {
+      const bool last = f == numFrames;
+      if (gpuCapturePath && last)
+        ctx->startGpuCapture(gpuCapturePath);
+      const float time = float(numFrames > 1 ? f : app.screenshotFrame) / 60.0f;
+      lvk::ICommandBuffer& cmd = ctx->acquireCommandBuffer();
+      swapchain = ctx->getCurrentSwapchainTexture();
+      sample->render(cmd, swapchain, time);
+      const lvk::SubmitHandle handle = ctx->submit(cmd, {});
+      ctx->wait(handle);
+    }
     if (gpuCapturePath)
       ctx->stopGpuCapture();
     exitCode = writeScreenshotPNG(*ctx, swapchain, uint32_t(fbWidth), uint32_t(fbHeight), app.screenshotFile.c_str()) ? 0 : 1;

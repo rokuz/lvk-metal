@@ -1087,7 +1087,7 @@ class SolarSystem final : public lvk::metal::ISample {
     int w = 0, h = 0;
     glfwGetWindowSize(window, &w, &h);
     self->mouseX_ = w > 0 ? float(x) / float(w) : 0.0f;
-    self->mouseY_ = h > 0 ? float(y) / float(h) : 0.0f;
+    self->mouseY_ = h > 0 ? 1.0f - float(y) / float(h) : 0.0f;
   }
 
   uint32_t width_ = 0;

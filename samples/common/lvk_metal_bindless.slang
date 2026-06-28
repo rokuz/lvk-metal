@@ -7,11 +7,14 @@ module lvk_metal_bindless;
 #define LVK_BINDLESS_SAMPLERS 1024
 #endif
 
-public struct lvkBuffers      { uint64_t     data[1]; };
-public struct lvkTextures2D   { Texture2D    data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkTextures3D   { Texture3D    data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkTexturesCube { TextureCube  data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkSamplers     { SamplerState data[LVK_BINDLESS_SAMPLERS]; };
+public struct lvkBuffers            { uint64_t                data[1]; };
+public struct lvkTextures2D         { Texture2D               data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkTextures3D         { Texture3D               data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkTexturesCube       { TextureCube             data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkSamplers           { SamplerState            data[LVK_BINDLESS_SAMPLERS]; };
+public struct lvkImages2D           { RWTexture2D<float4>     data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkTexturesDepth2D    { Texture2D               data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkSamplersComparison { SamplerComparisonState  data[LVK_BINDLESS_SAMPLERS]; };
 
 // Slang assigns indices by order. Push constants have index 0.
 public ParameterBlock<lvkBuffers> kBuffers; // 1
@@ -19,6 +22,9 @@ public ParameterBlock<lvkTextures2D> kTextures2D; // 2
 public ParameterBlock<lvkTextures3D> kTextures3D; // 3
 public ParameterBlock<lvkTexturesCube> kTexturesCube; // 4
 public ParameterBlock<lvkSamplers> kSamplers; // 5
+public ParameterBlock<lvkImages2D> kImages2D; // 6
+public ParameterBlock<lvkTexturesDepth2D> kTexturesDepth2D; // 7
+public ParameterBlock<lvkSamplersComparison> kSamplersComparison; // 8
 
 public float4 textureBindless2D(uint t, uint s, float2 uv) {
   return kTextures2D.data[t].Sample(kSamplers.data[s], uv);
@@ -40,6 +46,9 @@ public uint2 textureBindlessSize2D(uint t) {
   uint h;
   kTextures2D.data[t].GetDimensions(w, h);
   return uint2(w, h);
+}
+public float textureBindless2DShadow(uint t, uint s, float3 uvw) {
+  return kTexturesDepth2D.data[t].SampleCmp(kSamplersComparison.data[s], uvw.xy, uvw.z);
 }
 
 public float2x2 operator*(float2x2 a, float2x2 b) { return mul(b, a); }

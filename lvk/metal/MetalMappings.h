@@ -6,6 +6,31 @@
 
 namespace lvk::metal {
 
+inline uint32_t bytesPerMetalPixel(MTL::PixelFormat fmt) {
+  switch (fmt) {
+  case MTL::PixelFormatR8Unorm:
+  case MTL::PixelFormatR8Uint:
+    return 1;
+  case MTL::PixelFormatR16Float:
+  case MTL::PixelFormatR16Unorm:
+  case MTL::PixelFormatRG8Unorm:
+    return 2;
+  case MTL::PixelFormatRGBA8Unorm:
+  case MTL::PixelFormatRGBA8Unorm_sRGB:
+  case MTL::PixelFormatBGRA8Unorm:
+  case MTL::PixelFormatBGRA8Unorm_sRGB:
+  case MTL::PixelFormatRG16Float:
+  case MTL::PixelFormatR32Float:
+    return 4;
+  case MTL::PixelFormatRGBA16Float:
+    return 8;
+  case MTL::PixelFormatRGBA32Float:
+    return 16;
+  default:
+    return 4;
+  }
+}
+
 inline MTL::PixelFormat toMTLPixelFormat(Format format) {
   switch (format) {
   case Format_R_UN8:
@@ -109,7 +134,7 @@ inline MTL::StorageMode toMTLStorageMode(StorageType storage) {
 inline MTL::ResourceOptions toMTLBufferResourceOptions(StorageType storage) {
   switch (storage) {
   case StorageType_Device:
-    return MTL::ResourceStorageModeShared;
+    return MTL::ResourceStorageModePrivate;
   case StorageType_HostVisible:
     return MTL::ResourceStorageModeShared;
   default:

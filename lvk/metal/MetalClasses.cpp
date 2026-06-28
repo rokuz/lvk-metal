@@ -7,6 +7,7 @@
 #include "lvk/metal/MetalStagingDevice.h"
 #include "lvk/metal/MetalMappings.h"
 
+#include <cstdio>
 #include <cstring>
 #include <dispatch/dispatch.h>
 
@@ -124,13 +125,16 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
     return false;
 
   ArgumentTableDesc defaultDesc;
-  defaultDesc.numKinds = 6;
+  defaultDesc.numKinds = 9;
   defaultDesc.kinds[0] = ArgumentKind::Constants;
   defaultDesc.kinds[1] = ArgumentKind::Buffers;
   defaultDesc.kinds[2] = ArgumentKind::Textures2D;
   defaultDesc.kinds[3] = ArgumentKind::Textures3D;
   defaultDesc.kinds[4] = ArgumentKind::TexturesCube;
   defaultDesc.kinds[5] = ArgumentKind::Samplers;
+  defaultDesc.kinds[6] = ArgumentKind::Images2D;
+  defaultDesc.kinds[7] = ArgumentKind::TexturesDepth2D;
+  defaultDesc.kinds[8] = ArgumentKind::SamplersComparison;
   defaultDesc.debugName = "lvk-metal.default-argtable";
   defaultArgumentTable_ = createArgumentTable(defaultDesc, nullptr).release();
 
@@ -232,9 +236,12 @@ void MetalContext::rebindArgumentTableHeaps() {
       case ArgumentKind::Textures2D:
       case ArgumentKind::Textures3D:
       case ArgumentKind::TexturesCube:
+      case ArgumentKind::Images2D:
+      case ArgumentKind::TexturesDepth2D:
         at.table->setAddress(textureHeap_->gpuAddress(), i);
         break;
       case ArgumentKind::Samplers:
+      case ArgumentKind::SamplersComparison:
         at.table->setAddress(samplerHeap_->gpuAddress(), i);
         break;
       case ArgumentKind::Constants:
@@ -253,7 +260,6 @@ void MetalContext::ensureTextureCapacity(uint32_t index) {
   if (newCap > texturesCapacityMax_)
     newCap = texturesCapacityMax_;
   LVK_ASSERT_MSG(index < newCap, "texture bindless pool exhausted (max %u)", texturesCapacityMax_);
-  immediate_->waitAll();
   NS::SharedPtr<MTL::Buffer> nb =
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), textureHeap_->contents(), NS::UInteger(texturesCapacity_) * sizeof(MTL::ResourceID));
@@ -274,7 +280,6 @@ void MetalContext::ensureSamplerCapacity(uint32_t index) {
   if (newCap > samplersCapacityMax_)
     newCap = samplersCapacityMax_;
   LVK_ASSERT_MSG(index < newCap, "sampler bindless pool exhausted (max %u)", samplersCapacityMax_);
-  immediate_->waitAll();
   NS::SharedPtr<MTL::Buffer> nb =
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), samplerHeap_->contents(), NS::UInteger(samplersCapacity_) * sizeof(MTL::ResourceID));
@@ -301,7 +306,6 @@ void MetalContext::ensureBufferCapacity(uint32_t index) {
   if (newCap > buffersCapacityMax_)
     newCap = buffersCapacityMax_;
   LVK_ASSERT_MSG(index < newCap, "buffer bindless pool exhausted (max %u)", buffersCapacityMax_);
-  immediate_->waitAll();
   NS::SharedPtr<MTL::Buffer> nb =
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::GPUAddress), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), bufferHeap_->contents(), NS::UInteger(buffersCapacity_) * sizeof(MTL::GPUAddress));
@@ -348,6 +352,10 @@ IMetalCommandBuffer& MetalContext::acquireMetalCommandBuffer(bool) {
 SubmitHandle MetalContext::submit(lvk::ICommandBuffer&, TextureHandle present) {
   LVK_ASSERT(currentWrapper_);
 
+  flushResidency();
+  if (immediate_->hasDeferred())
+    immediate_->flushDeferred();
+
   if (currentDrawable_)
     commandQueue_->wait(currentDrawable_);
 
@@ -380,8 +388,12 @@ Holder<BufferHandle> MetalContext::createBuffer(const BufferDesc& desc, const ch
   }
   ns::setLabel(buffer.get(), debugName ? debugName : desc.debugName);
   addResident(buffer.get());
-  if (desc.data && buffer->contents())
-    std::memcpy(buffer->contents(), desc.data, desc.size);
+  if (desc.data) {
+    if (buffer->storageMode() == MTL::StorageModeShared)
+      std::memcpy(buffer->contents(), desc.data, desc.size);
+    else
+      staging_->uploadBuffer(buffer.get(), 0, desc.size, desc.data);
+  }
 
   const MTL::GPUAddress address = buffer->gpuAddress();
   MetalBuffer mb;
@@ -409,7 +421,6 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
   NS::SharedPtr<MTL::Texture> texture = NS::TransferPtr(device_->newTexture(td.get()));
   if (!texture) {
     Result::setResult(outResult, Result::Code::RuntimeError, "newTexture failed");
-    return {};
   }
   ns::setLabel(texture.get(), debugName ? debugName : desc.debugName);
   addResident(texture.get());
@@ -470,16 +481,26 @@ using namespace metal;
 #define LVK_BINDLESS_SAMPLERS 1024
 #endif
 
-struct lvkTextures2D   { array<texture2d<float>,   LVK_BINDLESS_TEXTURES> data; };
-struct lvkTextures3D   { array<texture3d<float>,   LVK_BINDLESS_TEXTURES> data; };
-struct lvkTexturesCube { array<texturecube<float>, LVK_BINDLESS_TEXTURES> data; };
-struct lvkSamplers     { array<sampler,            LVK_BINDLESS_SAMPLERS> data; };
+struct lvkTextures2D     { array<texture2d<float>,                       LVK_BINDLESS_TEXTURES> data; };
+struct lvkTextures3D     { array<texture3d<float>,                       LVK_BINDLESS_TEXTURES> data; };
+struct lvkTexturesCube   { array<texturecube<float>,                     LVK_BINDLESS_TEXTURES> data; };
+struct lvkSamplers       { array<sampler,                                LVK_BINDLESS_SAMPLERS> data; };
+struct lvkImages2D       { array<texture2d<float, access::read_write>,    LVK_BINDLESS_TEXTURES> data; };
+struct lvkTexturesDepth2D { array<depth2d<float>,                         LVK_BINDLESS_TEXTURES> data; };
 
 #define LVK_BINDLESS_ARGS \
+  device const lvkTextures2D&      kTextures2D      [[buffer(2)]], \
+  device const lvkTextures3D&      kTextures3D      [[buffer(3)]], \
+  device const lvkTexturesCube&    kTexturesCube    [[buffer(4)]], \
+  constant lvkSamplers&            kSamplers        [[buffer(5)]], \
+  device const lvkTexturesDepth2D& kTexturesDepth2D [[buffer(7)]]
+
+#define LVK_BINDLESS_COMPUTE_ARGS \
   device const lvkTextures2D&   kTextures2D   [[buffer(2)]], \
   device const lvkTextures3D&   kTextures3D   [[buffer(3)]], \
   device const lvkTexturesCube& kTexturesCube [[buffer(4)]], \
-  constant lvkSamplers&         kSamplers     [[buffer(5)]]
+  constant lvkSamplers&         kSamplers     [[buffer(5)]], \
+  device const lvkImages2D&     kImages2D     [[buffer(6)]]
 
 #define textureBindless2D(tid, sid, uv)            kTextures2D.data[tid].sample(kSamplers.data[sid], (uv))
 #define textureBindless2DLod(tid, sid, uv, lod)    kTextures2D.data[tid].sample(kSamplers.data[sid], (uv), level(lod))
@@ -487,7 +508,34 @@ struct lvkSamplers     { array<sampler,            LVK_BINDLESS_SAMPLERS> data; 
 #define textureBindlessCube(tid, sid, dir)         kTexturesCube.data[tid].sample(kSamplers.data[sid], (dir))
 #define textureBindlessCubeLod(tid, sid, dir, lod) kTexturesCube.data[tid].sample(kSamplers.data[sid], (dir), level(lod))
 #define textureBindlessSize2D(tid)                 uint2(kTextures2D.data[tid].get_width(), kTextures2D.data[tid].get_height())
+#define textureBindless2DShadow(tid, sid, uvw)     kTexturesDepth2D.data[tid].sample_compare(kSamplers.data[sid], (uvw).xy, (uvw).z)
+#define imageBindlessLoad2D(tid, pos)              kImages2D.data[tid].read(uint2(pos))
+#define imageBindlessStore2D(tid, pos, val)        kImages2D.data[tid].write((val), uint2(pos))
 )";
+
+static MTL::Size parseThreadgroupSize(const char* src) {
+  MTL::Size s(16, 16, 1);
+  if (!src)
+    return s;
+  unsigned x = 0, y = 0, z = 0;
+  if (const char* p = std::strstr(src, "LVK_NUMTHREADS")) {
+    if (std::sscanf(p, "LVK_NUMTHREADS %u %u %u", &x, &y, &z) >= 1)
+      return MTL::Size(x ? x : 1, y ? y : 1, z ? z : 1);
+  }
+  if (const char* p = std::strstr(src, "numthreads(")) {
+    if (std::sscanf(p, "numthreads( %u , %u , %u", &x, &y, &z) >= 1)
+      return MTL::Size(x ? x : 1, y ? y : 1, z ? z : 1);
+  }
+  if (const char* px = std::strstr(src, "local_size_x"))
+    std::sscanf(px, "local_size_x = %u", &x);
+  if (const char* py = std::strstr(src, "local_size_y"))
+    std::sscanf(py, "local_size_y = %u", &y);
+  if (const char* pz = std::strstr(src, "local_size_z"))
+    std::sscanf(pz, "local_size_z = %u", &z);
+  if (x || y || z)
+    return MTL::Size(x ? x : 1, y ? y : 1, z ? z : 1);
+  return s;
+}
 
 Holder<ShaderModuleHandle> MetalContext::createShaderModule(const ShaderModuleDesc& desc, Result* outResult) {
   NS::SharedPtr<MTL::Library> library;
@@ -526,7 +574,28 @@ Holder<ShaderModuleHandle> MetalContext::createShaderModule(const ShaderModuleDe
   MetalShaderModule sm;
   sm.library = std::move(library);
   sm.function = std::move(function);
+  if (desc.data && desc.dataSize == 0)
+    sm.threadgroupSize = parseThreadgroupSize(desc.data);
   return {this, shaderModules_.create(std::move(sm))};
+}
+
+Holder<ComputePipelineHandle> MetalContext::createComputePipeline(const ComputePipelineDesc& desc, Result* outResult) {
+  const MetalShaderModule* comp = shaderModules_.get(desc.smComp);
+  if (!comp || !comp->function) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "missing compute shader");
+    return {};
+  }
+  NS::Error* error = nullptr;
+  NS::SharedPtr<MTL::ComputePipelineState> pipeline = NS::TransferPtr(device_->newComputePipelineState(comp->function.get(), &error));
+  if (!pipeline) {
+    LLOGE("createComputePipeline failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    Result::setResult(outResult, Result::Code::RuntimeError, "newComputePipelineState failed");
+    return {};
+  }
+  MetalComputePipeline cp;
+  cp.pipeline = std::move(pipeline);
+  cp.threadgroupSize = comp->threadgroupSize;
+  return {this, computePipelines_.create(std::move(cp))};
 }
 
 Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult) {
@@ -604,9 +673,12 @@ Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTabl
     case ArgumentKind::Textures2D:
     case ArgumentKind::Textures3D:
     case ArgumentKind::TexturesCube:
+    case ArgumentKind::Images2D:
+    case ArgumentKind::TexturesDepth2D:
       table->setAddress(textureHeap_->gpuAddress(), i);
       break;
     case ArgumentKind::Samplers:
+    case ArgumentKind::SamplersComparison:
       table->setAddress(samplerHeap_->gpuAddress(), i);
       break;
     case ArgumentKind::Constants:
@@ -619,6 +691,9 @@ Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTabl
 
 void MetalContext::destroy(RenderPipelineHandle handle) {
   renderPipelines_.destroy(handle);
+}
+void MetalContext::destroy(ComputePipelineHandle handle) {
+  computePipelines_.destroy(handle);
 }
 void MetalContext::destroy(ShaderModuleHandle handle) {
   shaderModules_.destroy(handle);
@@ -668,7 +743,7 @@ Result MetalContext::upload(BufferHandle handle, const void* data, size_t size, 
   MetalBuffer* mb = buffers_.get(handle);
   if (!mb || !mb->buffer)
     return Result(Result::Code::ArgumentOutOfRange, "invalid buffer");
-  if (mb->buffer->contents()) {
+  if (mb->buffer->storageMode() == MTL::StorageModeShared) {
     std::memcpy(static_cast<uint8_t*>(mb->buffer->contents()) + offset, data, size);
     return Result();
   }
@@ -678,15 +753,35 @@ Result MetalContext::upload(BufferHandle handle, const void* data, size_t size, 
 
 Result MetalContext::download(BufferHandle handle, void* data, size_t size, size_t offset) {
   const MetalBuffer* mb = buffers_.get(handle);
-  if (!mb || !mb->buffer || !mb->buffer->contents())
+  if (!mb || !mb->buffer)
     return Result(Result::Code::ArgumentOutOfRange, "invalid buffer");
-  std::memcpy(data, static_cast<const uint8_t*>(mb->buffer->contents()) + offset, size);
+  if (mb->buffer->storageMode() == MTL::StorageModeShared) {
+    std::memcpy(data, static_cast<const uint8_t*>(mb->buffer->contents()) + offset, size);
+    return Result();
+  }
+  NS::SharedPtr<MTL::Buffer> staging = NS::TransferPtr(device_->newBuffer(size, MTL::ResourceStorageModeShared));
+  if (!staging)
+    return Result(Result::Code::RuntimeError, "download staging buffer alloc failed");
+  residencySet_->addAllocation(staging.get());
+  residencySet_->commit();
+  residencySet_->requestResidency();
+  const MetalImmediateCommands::CommandBufferWrapper& wrapper = immediate_->acquire();
+  MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
+  enc->copyFromBuffer(mb->buffer.get(), offset, staging.get(), 0, size);
+  enc->endEncoding();
+  const SubmitHandle sh = immediate_->submit(wrapper);
+  immediate_->wait(sh);
+  residencySet_->removeAllocation(staging.get());
+  residencySet_->commit();
+  std::memcpy(data, staging->contents(), size);
   return Result();
 }
 
 uint8_t* MetalContext::getMappedPtr(BufferHandle handle) const {
   const MetalBuffer* mb = buffers_.get(handle);
-  return mb && mb->buffer ? static_cast<uint8_t*>(mb->buffer->contents()) : nullptr;
+  if (!mb || !mb->buffer || mb->buffer->storageMode() != MTL::StorageModeShared)
+    return nullptr;
+  return static_cast<uint8_t*>(mb->buffer->contents());
 }
 
 uint64_t MetalContext::gpuAddress(BufferHandle handle, size_t offset) const {
@@ -702,7 +797,8 @@ Result MetalContext::upload(TextureHandle handle, const TextureRangeDesc& range,
     staging_->uploadTexture(img->texture.get(), range.dimensions.width, range.dimensions.height, range.layer, range.mipLevel, data);
     return Result();
   }
-  const NS::UInteger bytesPerRow = NS::UInteger(bufferRowLength ? bufferRowLength : range.dimensions.width) * 4;
+  const NS::UInteger bpp = bytesPerMetalPixel(img->texture->pixelFormat());
+  const NS::UInteger bytesPerRow = NS::UInteger(bufferRowLength ? bufferRowLength : range.dimensions.width) * bpp;
   const MTL::Region region(
       uint32_t(range.offset.x), uint32_t(range.offset.y), range.dimensions.width, range.dimensions.height);
   img->texture->replaceRegion(region, range.mipLevel, range.layer, data, bytesPerRow, 0);
@@ -826,6 +922,8 @@ void MetalContext::recreateSwapchain(int newWidth, int newHeight) {
 }
 
 void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const lvk::Framebuffer& framebuffer, const lvk::Dependencies& deps) {
+  endComputeEncoder();
+
   NS::SharedPtr<MTL4::RenderPassDescriptor> rpd = ns::make<MTL4::RenderPassDescriptor>();
 
   uint32_t rtWidth = 0;
@@ -882,14 +980,8 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, const l
 
   isRendering_ = true;
   argTableOverridden_ = false;
+  ctx_->setRenderEncoderOpen(true);
   bindArgumentTableInternal(ctx_->defaultArgumentTable());
-}
-
-void CommandBuffer::cmdBarrierAfterTransfer() {
-  if (encoder_)
-    encoder_->barrierAfterQueueStages(MTL::StageDispatch | MTL::StageBlit,
-                                      MTL::StageVertex | MTL::StageFragment,
-                                      MTL4::VisibilityOptionDevice);
 }
 
 void CommandBuffer::cmdEndRendering() {
@@ -898,6 +990,7 @@ void CommandBuffer::cmdEndRendering() {
     encoder_ = nullptr;
   }
   isRendering_ = false;
+  ctx_->setRenderEncoderOpen(false);
 }
 
 void CommandBuffer::cmdBindRenderPipeline(RenderPipelineHandle handle) {
@@ -908,6 +1001,52 @@ void CommandBuffer::cmdBindRenderPipeline(RenderPipelineHandle handle) {
   encoder_->setFrontFacingWinding(p->frontFace);
   encoder_->setTriangleFillMode(p->fillMode);
   topology_ = p->topology;
+}
+
+void CommandBuffer::endComputeEncoder() {
+  if (computeEncoder_) {
+    computeEncoder_->endEncoding();
+    computeEncoder_ = nullptr;
+  }
+}
+
+void CommandBuffer::setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table) {
+  if (computeEncoder_)
+    computeEncoder_->setArgumentTable(table);
+  else if (encoder_)
+    encoder_->setArgumentTable(table, static_cast<MTL::RenderStages>(MTL::RenderStageVertex | MTL::RenderStageFragment));
+}
+
+void CommandBuffer::cmdBindComputePipeline(ComputePipelineHandle handle) {
+  const MetalComputePipeline* p = ctx_->getComputePipeline(handle);
+  LVK_ASSERT(p && p->pipeline);
+  if (!p || !p->pipeline)
+    return;
+  if (!computeEncoder_) {
+    computeEncoder_ = ctx_->commandBuffer()->computeCommandEncoder();
+    // computeEncoder_->barrierAfterQueueStages(
+    //     MTL::StageVertex | MTL::StageFragment | MTL::StageBlit, MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+    bindArgumentTableInternal(ctx_->defaultArgumentTable());
+  }
+  computeEncoder_->setComputePipelineState(p->pipeline.get());
+  computeThreadgroupSize_ = p->threadgroupSize;
+}
+
+void CommandBuffer::cmdDispatch(const Dimensions& groupCount, const Dependencies&) {
+  if (!computeEncoder_)
+    return;
+  computeEncoder_->dispatchThreadgroups(MTL::Size(groupCount.width, groupCount.height, groupCount.depth), computeThreadgroupSize_);
+  endComputeEncoder();
+}
+
+void CommandBuffer::cmdDispatchIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, const Dependencies&) {
+  if (!computeEncoder_)
+    return;
+  const MetalBuffer* b = ctx_->getBuffer(indirectBuffer);
+  if (!b || !b->buffer)
+    return;
+  computeEncoder_->dispatchThreadgroups(b->buffer->gpuAddress() + indirectBufferOffset, computeThreadgroupSize_);
+  endComputeEncoder();
 }
 
 void CommandBuffer::cmdBindDepthState(const DepthState& state) {
@@ -922,7 +1061,7 @@ void CommandBuffer::bindArgumentTableInternal(ArgumentTableHandle handle) {
   currentArgTable_ = handle;
   const MetalArgumentTable* at = ctx_->getArgumentTable(handle);
   if (at && at->table)
-    encoder_->setArgumentTable(at->table.get(), static_cast<MTL::RenderStages>(MTL::RenderStageVertex | MTL::RenderStageFragment));
+    setArgumentTableOnActiveEncoder(at->table.get());
 }
 
 void CommandBuffer::resetArgumentTableIfOverridden() {
@@ -969,7 +1108,7 @@ void CommandBuffer::cmdPushConstants(const void* data, size_t size, size_t offse
     return;
   const MTL::GPUAddress addr = ctx_->writePushConstants(data, size, offset);
   at->table->setAddress(addr, at->constantsIndex);
-  encoder_->setArgumentTable(at->table.get(), static_cast<MTL::RenderStages>(MTL::RenderStageVertex | MTL::RenderStageFragment));
+  setArgumentTableOnActiveEncoder(at->table.get());
 }
 
 void CommandBuffer::cmdDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t baseInstance) {

@@ -249,23 +249,31 @@ void ImGuiRenderer::endFrame(lvk::ICommandBuffer& cmd) {
   DrawableData& drawableData = drawables_[frameIndex_];
   frameIndex_ = (frameIndex_ + 1) % LVK_ARRAY_NUM_ELEMENTS(drawables_);
 
-  if (drawableData.numAllocatedIndices_ < uint32_t(dd->TotalIdxCount)) {
+  const auto alignTo4 = [](size_t n) -> size_t { return (n + 3) & ~size_t(3); };
+
+  size_t idxBufBytes = 0;
+  for (const ImDrawList* cmdList : dd->CmdLists) {
+    idxBufBytes += alignTo4(size_t(cmdList->IdxBuffer.Size) * sizeof(ImDrawIdx));
+  }
+
+  if (drawableData.indexBufferSize_ < idxBufBytes) {
     drawableData.ib_ = ctx_.createBuffer({
         .usage = lvk::BufferUsageBits_Index,
         .storage = lvk::StorageType_Device,
-        .size = dd->TotalIdxCount * sizeof(ImDrawIdx),
+        .size = idxBufBytes,
         .debugName = "ImGui: ib",
     });
-    drawableData.numAllocatedIndices_ = dd->TotalIdxCount;
+    drawableData.indexBufferSize_ = idxBufBytes;
   }
-  if (drawableData.numAllocatedVertices_ < uint32_t(dd->TotalVtxCount)) {
+  const auto vertexBufferSize = uint32_t(dd->TotalVtxCount) * sizeof(ImDrawVert);
+  if (drawableData.vertexBufferSize_ < vertexBufferSize) {
     drawableData.vb_ = ctx_.createBuffer({
         .usage = lvk::BufferUsageBits_Storage,
         .storage = lvk::StorageType_Device,
-        .size = dd->TotalVtxCount * sizeof(ImDrawVert),
+        .size = vertexBufferSize,
         .debugName = "ImGui: vb",
     });
-    drawableData.numAllocatedVertices_ = dd->TotalVtxCount;
+    drawableData.vertexBufferSize_ = vertexBufferSize;
   }
 
   {
@@ -277,7 +285,7 @@ void ImGuiRenderer::endFrame(lvk::ICommandBuffer& cmd) {
       ctx_.upload(drawableData.vb_, cmdList->VtxBuffer.Data, vtxBytes, vtxBytesOffset);
       ctx_.upload(drawableData.ib_, cmdList->IdxBuffer.Data, idxBytes, idxBytesOffset);
       vtxBytesOffset += vtxBytes;
-      idxBytesOffset += idxBytes;
+      idxBytesOffset += alignTo4(idxBytes);
     }
   }
 
@@ -334,7 +342,7 @@ void ImGuiRenderer::endFrame(lvk::ICommandBuffer& cmd) {
           {uint32_t(clipMin.x), uint32_t(clipMin.y), uint32_t(clipMax.x - clipMin.x), uint32_t(clipMax.y - clipMin.y)});
       cmd.cmdDrawIndexed(cmd_.ElemCount, 1u, idxOffset + cmd_.IdxOffset, int32_t(vtxOffset + cmd_.VtxOffset));
     }
-    idxOffset += cmdList->IdxBuffer.Size;
+    idxOffset += uint32_t(alignTo4(size_t(cmdList->IdxBuffer.Size) * sizeof(ImDrawIdx)) / sizeof(ImDrawIdx));
     vtxOffset += cmdList->VtxBuffer.Size;
   }
 

@@ -13,6 +13,7 @@ namespace lvk::metal {
 struct AppConfig {
   std::string screenshotFile;
   int screenshotFrame = 1;
+  int numFrames = 1;
   bool headless = false;
   int width = 0;
   int height = 0;

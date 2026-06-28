@@ -47,6 +47,9 @@ enum class ArgumentKind : uint8_t {
   Textures3D,
   TexturesCube,
   Samplers,
+  Images2D,
+  TexturesDepth2D,
+  SamplersComparison,
   Constants,
 };
 
@@ -60,7 +63,6 @@ struct ArgumentTableDesc {
 class IMetalCommandBuffer : public lvk::ICommandBuffer {
  public:
   virtual void cmdBindArgumentTable(ArgumentTableHandle handle) = 0;
-  virtual void cmdBarrierAfterTransfer() = 0;
 };
 
 class IMetalContext : public lvk::IContext {

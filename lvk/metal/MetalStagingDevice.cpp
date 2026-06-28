@@ -1,6 +1,7 @@
 #include "lvk/metal/MetalStagingDevice.h"
 
 #include "lvk/metal/MetalClasses.h"
+#include "lvk/metal/MetalMappings.h"
 
 #include <algorithm>
 #include <cstring>
@@ -49,7 +50,7 @@ void MetalStagingDevice::uploadTexture(MTL::Texture* texture,
                                        uint32_t slice,
                                        uint32_t mipLevel,
                                        const void* data) {
-  const uint64_t bytesPerRow = uint64_t(width) * 4;
+  const uint64_t bytesPerRow = uint64_t(width) * bytesPerMetalPixel(texture->pixelFormat());
   const uint64_t storageSize = bytesPerRow * height;
 
   ensureStagingBufferSize(storageSize);

@@ -33,6 +33,7 @@ struct MetalSampler {
 struct MetalShaderModule {
   NS::SharedPtr<MTL::Library> library;
   NS::SharedPtr<MTL::Function> function;
+  MTL::Size threadgroupSize = MTL::Size(16, 16, 1);
 };
 
 struct MetalRenderPipeline {
@@ -41,6 +42,11 @@ struct MetalRenderPipeline {
   MTL::CullMode cullMode = MTL::CullModeNone;
   MTL::Winding frontFace = MTL::WindingCounterClockwise;
   MTL::TriangleFillMode fillMode = MTL::TriangleFillModeFill;
+};
+
+struct MetalComputePipeline {
+  NS::SharedPtr<MTL::ComputePipelineState> pipeline;
+  MTL::Size threadgroupSize = MTL::Size(16, 16, 1);
 };
 
 struct MetalArgumentTable {
@@ -69,9 +75,9 @@ class CommandBuffer : public IMetalCommandBuffer {
 
   void cmdBindRayTracingPipeline(lvk::RayTracingPipelineHandle handle) override {}
 
-  void cmdBindComputePipeline(lvk::ComputePipelineHandle handle) override {}
-  void cmdDispatch(const Dimensions& groupCount, const Dependencies& deps = {}) override {}
-  void cmdDispatchIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset = 0, const Dependencies& deps = {}) override {}
+  void cmdBindComputePipeline(lvk::ComputePipelineHandle handle) override;
+  void cmdDispatch(const Dimensions& groupCount, const Dependencies& deps = {}) override;
+  void cmdDispatchIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset = 0, const Dependencies& deps = {}) override;
 
   void cmdBeginRendering(const lvk::RenderPass& renderPass, const lvk::Framebuffer& desc, const Dependencies& deps = {}) override;
   void cmdEndRendering() override;
@@ -140,7 +146,6 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override {}
 
   void cmdBindArgumentTable(ArgumentTableHandle handle) override;
-  void cmdBarrierAfterTransfer() override;
 
  protected:
   MetalContext* context() const {
@@ -150,9 +155,13 @@ class CommandBuffer : public IMetalCommandBuffer {
  private:
   void bindArgumentTableInternal(ArgumentTableHandle handle);
   void resetArgumentTableIfOverridden();
+  void setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table);
+  void endComputeEncoder();
 
   MetalContext* ctx_ = nullptr;
   MTL4::RenderCommandEncoder* encoder_ = nullptr;
+  MTL4::ComputeCommandEncoder* computeEncoder_ = nullptr;
+  MTL::Size computeThreadgroupSize_ = MTL::Size(16, 16, 1);
   MTL::PrimitiveType topology_ = MTL::PrimitiveTypeTriangle;
   ArgumentTableHandle currentArgTable_;
   bool argTableOverridden_ = false;
@@ -175,6 +184,9 @@ class MetalContext : public IMetalContext {
   const GpuLimits& limits() const {
     return limits_;
   }
+  void setRenderEncoderOpen(bool open) {
+    renderEncoderOpen_ = open;
+  }
 
   [[nodiscard]] bool initialize(CA::MetalLayer* layer, uint32_t width, uint32_t height, const ContextConfig& cfg);
 
@@ -192,10 +204,7 @@ class MetalContext : public IMetalContext {
     Result::setResult(outResult, Result::Code::RuntimeError, "createTextureView not implemented");
     return {};
   }
-  Holder<ComputePipelineHandle> createComputePipeline(const ComputePipelineDesc& desc, Result* outResult = nullptr) override {
-    Result::setResult(outResult, Result::Code::RuntimeError, "createComputePipeline not implemented");
-    return {};
-  }
+  Holder<ComputePipelineHandle> createComputePipeline(const ComputePipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<RayTracingPipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc, Result* outResult = nullptr) override {
     Result::setResult(outResult, Result::Code::RuntimeError, "createRayTracingPipeline not implemented");
@@ -215,7 +224,7 @@ class MetalContext : public IMetalContext {
   bool startGpuCapture(const char* outputPath) override;
   void stopGpuCapture() override;
 
-  void destroy(ComputePipelineHandle handle) override {}
+  void destroy(ComputePipelineHandle handle) override;
   void destroy(RenderPipelineHandle handle) override;
   void destroy(RayTracingPipelineHandle handle) override {}
   void destroy(ShaderModuleHandle handle) override;
@@ -296,6 +305,9 @@ class MetalContext : public IMetalContext {
   const MetalRenderPipeline* getRenderPipeline(RenderPipelineHandle handle) const {
     return renderPipelines_.get(handle);
   }
+  const MetalComputePipeline* getComputePipeline(ComputePipelineHandle handle) const {
+    return computePipelines_.get(handle);
+  }
   const MetalBuffer* getBuffer(BufferHandle handle) const {
     return buffers_.get(handle);
   }
@@ -328,6 +340,7 @@ class MetalContext : public IMetalContext {
   std::unique_ptr<MetalImmediateCommands> immediate_;
   std::unique_ptr<MetalStagingDevice> staging_;
   const MetalImmediateCommands::CommandBufferWrapper* currentWrapper_ = nullptr;
+  bool renderEncoderOpen_ = false;
 
   CA::MetalLayer* metalLayer_ = nullptr;
   CA::MetalDrawable* currentDrawable_ = nullptr;
@@ -368,6 +381,7 @@ class MetalContext : public IMetalContext {
   ldr::Pool<lvk::Sampler, MetalSampler> samplers_;
   ldr::Pool<lvk::ShaderModule, MetalShaderModule> shaderModules_;
   ldr::Pool<lvk::RenderPipeline, MetalRenderPipeline> renderPipelines_;
+  ldr::Pool<lvk::ComputePipeline, MetalComputePipeline> computePipelines_;
   ldr::Pool<lvk::metal::ArgumentTable, MetalArgumentTable> argumentTables_;
 
   TextureHandle swapchainTextureHandle_;

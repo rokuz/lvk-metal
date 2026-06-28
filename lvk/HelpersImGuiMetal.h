@@ -49,8 +49,8 @@ class ImGuiRenderer {
   struct DrawableData {
     lvk::Holder<lvk::BufferHandle> vb_;
     lvk::Holder<lvk::BufferHandle> ib_;
-    uint32_t numAllocatedIndices_ = 0;
-    uint32_t numAllocatedVertices_ = 0;
+    size_t indexBufferSize_ = 0;
+    size_t vertexBufferSize_ = 0;
   };
 
   DrawableData drawables_[3] = {};
