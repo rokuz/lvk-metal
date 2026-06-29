@@ -38,6 +38,12 @@ struct ISample {
                     uint32_t samplesCount) = 0;
   virtual void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float timeSeconds) = 0;
   virtual void destroy() {}
+
+  // Samples that stream assets asynchronously (e.g. background texture loading) return false until
+  // everything is resident, so the headless screenshot path can wait for a fully-loaded frame.
+  virtual bool isReadyForScreenshot() const {
+    return true;
+  }
 };
 
 int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& sample);

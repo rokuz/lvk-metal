@@ -101,6 +101,8 @@ endfunction()
 
 if(LVK_METAL_WITH_SAMPLES)
   add_subdirectory(samples/HelloTriangle)
+  add_subdirectory(samples/MeshShaders)
+  add_subdirectory(samples/MeshShaderFireworks)
   add_subdirectory(samples/RenderToCubeMap)
   add_subdirectory(samples/RenderToCubeMapSinglePass)
   add_subdirectory(samples/SolarSystem)

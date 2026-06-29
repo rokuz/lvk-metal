@@ -60,6 +60,10 @@ struct ArgumentTableDesc {
   const char* debugName = "";
 };
 
+struct ShaderModuleMetadata {
+  Dimensions threadgroupSize = {1, 1, 1};
+};
+
 class IMetalCommandBuffer : public lvk::ICommandBuffer {
  public:
   virtual void cmdBindArgumentTable(ArgumentTableHandle handle) = 0;
@@ -81,6 +85,8 @@ class IMetalContext : public lvk::IContext {
 
   virtual bool startGpuCapture(const char* outputPath) = 0;
   virtual void stopGpuCapture() = 0;
+
+  virtual void setShaderModuleMetadata(ShaderModuleHandle handle, const ShaderModuleMetadata& metadata) = 0;
 };
 
 std::unique_ptr<IMetalContext> createContextWithMetalLayer(CA::MetalLayer* layer,

@@ -53,6 +53,8 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | Demo | Screenshot |
 | --- | --- |
 | **HelloTriangle** — minimal triangle | <img src="tests/references/HelloTriangle.png" width="320"> |
+| **MeshShaders** — a triangle emitted by an object + mesh shader | <img src="tests/references/MeshShaders.png" width="320"> |
+| **MeshShaderFireworks** — GPU-billboarded particle fireworks via a mesh shader, additive blending | <img src="tests/references/MeshShaderFireworks.png" width="320"> |
 | **RenderToCubeMap** — render a scene into a cubemap, then sample it | <img src="tests/references/RenderToCubeMap.png" width="320"> |
 | **RenderToCubeMapSinglePass** — the same in one layered pass | <img src="tests/references/RenderToCubeMapSinglePass.png" width="320"> |
 | **ImGuiDemo** — Dear ImGui integration | <img src="tests/references/ImGuiDemo.png" width="320"> |
@@ -83,7 +85,7 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | Specialization constants | ✅ Implemented | Mapped to Metal function constants (`[[function_constant(N)]]`); types resolved via library reflection, `constantId` == the MSL index |
 | Layout transitions / barriers (`cmdTransitionTo*`) | ✅ Implemented | No-ops — Metal auto-tracks hazards (residency set + encoder barriers) |
 | Tessellation (`smTesc` / `smTese`, patch control points) | ⬜ Not implemented | Metal uses a different model (compute-generated factors + post-tessellation vertex function) |
-| Mesh / task shaders | ⬜ Not implemented | Metal has object/mesh shaders; not wired yet |
+| Mesh / task shaders | ✅ Implemented | Mapped to Metal object/mesh shaders + `drawMeshThreadgroups`; threadgroup size via a `clang::annotate("lvk_numthreads(...)")` attribute (MSL) or Slang reflection. See the `MeshShaders` and `MeshShaderFireworks` samples |
 | Ray tracing — pipelines, acceleration structures, `cmdTraceRays`, TLAS | ⬜ Not implemented | Fully implemented in LVK (the `RTX_*` samples); Metal supports RT (`MTLAccelerationStructure`, intersectors), not wired here yet |
 | Indirect draws (`cmdDrawIndirect*`) | ⬜ Not implemented | Metal supports indirect draws / indirect command buffers |
 | Buffer copy / fill / update | ⬜ Not implemented | Metal blit encoder |
@@ -93,7 +95,6 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | YUV textures | ⬜ Not implemented | Metal biplanar YUV formats |
 | Async-compute queue | ⬜ Not implemented | Single queue today; Metal allows several |
 | HDR / EDR swapchain | ⬜ Not implemented | Only sRGB gamma is wired; EDR not exposed |
-| Present-mode selection | ⬜ Not implemented | vsync (FIFO) only, via `displaySyncEnabled` |
 | Render-pass subpasses (`cmdNextSubpass`, input attachments) | ⬜ Not implemented | Metal favors single-pass tile memory / programmable blending |
 | SPIR-V shader ingestion | ⛔ Unsupported | Deliberate — author in MSL or Slang |
 | Binding vertex buffers / vertex input | ⛔ Unsupported | By design (won't be added) — bindless vertex pulling via GPU address |

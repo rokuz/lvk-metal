@@ -58,7 +58,10 @@ bool SlangRuntime::valid() const noexcept {
   return impl_ != nullptr;
 }
 
-std::string SlangRuntime::compileToMSL(char const* moduleName, char const* entryPoint) noexcept {
+std::string SlangRuntime::compileToMSL(char const* moduleName, char const* entryPoint, uint32_t outThreadgroupSize[3]) noexcept {
+  if (outThreadgroupSize) {
+    outThreadgroupSize[0] = outThreadgroupSize[1] = outThreadgroupSize[2] = 1;
+  }
   if (!impl_)
     return {};
 
@@ -97,16 +100,32 @@ std::string SlangRuntime::compileToMSL(char const* moduleName, char const* entry
     return {};
   }
 
+  if (outThreadgroupSize) {
+    if (slang::ProgramLayout* layout = linked->getLayout(0, nullptr)) {
+      if (layout->getEntryPointCount() > 0) {
+        SlangUInt sizes[3] = {1, 1, 1};
+        layout->getEntryPointByIndex(0)->getComputeThreadGroupSize(3, sizes);
+        outThreadgroupSize[0] = uint32_t(sizes[0] ? sizes[0] : 1);
+        outThreadgroupSize[1] = uint32_t(sizes[1] ? sizes[1] : 1);
+        outThreadgroupSize[2] = uint32_t(sizes[2] ? sizes[2] : 1);
+      }
+    }
+  }
+
   return std::string(static_cast<char const*>(code->getBufferPointer()), code->getBufferSize());
 }
 
-lvk::Holder<lvk::ShaderModuleHandle> SlangRuntime::createShaderModule(lvk::IContext& ctx,
+lvk::Holder<lvk::ShaderModuleHandle> SlangRuntime::createShaderModule(lvk::metal::IMetalContext& ctx,
                                                                       char const* moduleName,
                                                                       char const* entryPoint,
                                                                       lvk::ShaderStage stage,
                                                                       char const* debugName) noexcept {
-  std::string const msl = compileToMSL(moduleName, entryPoint);
+  uint32_t threadgroupSize[3] = {1, 1, 1};
+  std::string const msl = compileToMSL(moduleName, entryPoint, threadgroupSize);
   if (msl.empty())
     return {};
-  return ctx.createShaderModule({msl.c_str(), entryPoint, stage, debugName});
+  lvk::Holder<lvk::ShaderModuleHandle> handle = ctx.createShaderModule({msl.c_str(), entryPoint, stage, debugName});
+  if (handle.valid())
+    ctx.setShaderModuleMetadata(handle, {.threadgroupSize = {threadgroupSize[0], threadgroupSize[1], threadgroupSize[2]}});
+  return handle;
 }

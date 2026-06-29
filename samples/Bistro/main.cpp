@@ -46,7 +46,7 @@ using glm::vec4;
 
 static const uint32_t kMeshCacheVersion = 0xC0DE000A;
 
-static const char* kShaderMSL = R"(
+static const char* kShaderMSL = R"MSL(
 #include <metal_stdlib>
 using namespace metal;
 
@@ -237,15 +237,15 @@ struct GrayscalePC {
   uint height;
 };
 
+[[clang::annotate("lvk_numthreads(16,16,1)")]]
 kernel void grayscaleMain(uint2 gid [[thread_position_in_grid]], constant GrayscalePC& pc [[buffer(0)]], LVK_BINDLESS_COMPUTE_ARGS) {
-  // LVK_NUMTHREADS 16 16 1
   if (gid.x < pc.width && gid.y < pc.height) {
     const float4 px = kImages2D.data[pc.tex].read(gid);
     const float l = dot(px, float4(0.299, 0.587, 0.114, 0.0));
     kImages2D.data[pc.tex].write(float4(l, l, l, 1.0), gid);
   }
 }
-)";
+)MSL";
 
 struct VertexData {
   vec3 position;
@@ -527,6 +527,10 @@ class Bistro final : public lvk::metal::ISample {
     cmd.cmdDraw(3);
     imgui_->endFrame(cmd);
     cmd.cmdEndRendering();
+  }
+
+  bool isReadyForScreenshot() const override {
+    return remainingMaterials_.load(std::memory_order_acquire) == 0;
   }
 
   void destroy() override {

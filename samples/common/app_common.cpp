@@ -111,6 +111,13 @@ int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& samp
   if (app.screenshot()) {
     const char* gpuCapturePath = getenv("LVKM_GPU_CAPTURE");
     const int numFrames = app.numFrames > 1 ? app.numFrames : 1;
+
+    while (!sample->isReadyForScreenshot()) {
+      lvk::ICommandBuffer& cmd = ctx->acquireCommandBuffer();
+      sample->render(cmd, ctx->getCurrentSwapchainTexture(), float(app.screenshotFrame) / 60.0f);
+      ctx->wait(ctx->submit(cmd, {}));
+    }
+
     lvk::TextureHandle swapchain;
     for (int f = 1; f <= numFrames; ++f) {
       const bool last = f == numFrames;

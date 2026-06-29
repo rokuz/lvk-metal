@@ -574,28 +574,27 @@ struct lvkTexturesDepth2D { array<depth2d<float>,                         LVK_BI
 #define imageBindlessStore2D(tid, pos, val)        kImages2D.data[tid].write((val), uint2(pos))
 )";
 
-static MTL::Size parseThreadgroupSize(const char* src) {
-  MTL::Size s(16, 16, 1);
+static MTL::Size parseThreadgroupSize(const char* src, const char* entryPoint) {
+  const MTL::Size kDefault(16, 16, 1);
   if (!src)
-    return s;
-  unsigned x = 0, y = 0, z = 0;
-  if (const char* p = std::strstr(src, "LVK_NUMTHREADS")) {
-    if (std::sscanf(p, "LVK_NUMTHREADS %u %u %u", &x, &y, &z) >= 1)
+    return kDefault;
+
+  const char* searchEnd = src + std::strlen(src);
+  if (entryPoint) {
+    if (const char* ep = std::strstr(src, entryPoint))
+      searchEnd = ep;
+  }
+
+  const char* found = nullptr;
+  for (const char* p = src; (p = std::strstr(p, "lvk_numthreads(")) != nullptr && p < searchEnd; ++p)
+    found = p;
+
+  if (found) {
+    unsigned x = 0, y = 0, z = 0;
+    if (std::sscanf(found, "lvk_numthreads( %u , %u , %u", &x, &y, &z) >= 1)
       return MTL::Size(x ? x : 1, y ? y : 1, z ? z : 1);
   }
-  if (const char* p = std::strstr(src, "numthreads(")) {
-    if (std::sscanf(p, "numthreads( %u , %u , %u", &x, &y, &z) >= 1)
-      return MTL::Size(x ? x : 1, y ? y : 1, z ? z : 1);
-  }
-  if (const char* px = std::strstr(src, "local_size_x"))
-    std::sscanf(px, "local_size_x = %u", &x);
-  if (const char* py = std::strstr(src, "local_size_y"))
-    std::sscanf(py, "local_size_y = %u", &y);
-  if (const char* pz = std::strstr(src, "local_size_z"))
-    std::sscanf(pz, "local_size_z = %u", &z);
-  if (x || y || z)
-    return MTL::Size(x ? x : 1, y ? y : 1, z ? z : 1);
-  return s;
+  return kDefault;
 }
 
 Holder<ShaderModuleHandle> MetalContext::createShaderModule(const ShaderModuleDesc& desc, Result* outResult) {
@@ -636,8 +635,16 @@ Holder<ShaderModuleHandle> MetalContext::createShaderModule(const ShaderModuleDe
   sm.library = std::move(library);
   sm.function = std::move(function);
   if (desc.data && desc.dataSize == 0)
-    sm.threadgroupSize = parseThreadgroupSize(desc.data);
+    sm.threadgroupSize = parseThreadgroupSize(desc.data, entry);
   return {this, shaderModules_.create(std::move(sm))};
+}
+
+void MetalContext::setShaderModuleMetadata(ShaderModuleHandle handle, const ShaderModuleMetadata& metadata) {
+  MetalShaderModule* sm = shaderModules_.get(handle);
+  if (!sm)
+    return;
+  const Dimensions& tg = metadata.threadgroupSize;
+  sm->threadgroupSize = MTL::Size(tg.width ? tg.width : 1, tg.height ? tg.height : 1, tg.depth ? tg.depth : 1);
 }
 
 NS::SharedPtr<MTL::Function> MetalContext::specializeFunction(const MetalShaderModule* sm, const SpecializationConstantDesc& spec) {
@@ -698,6 +705,63 @@ Holder<ComputePipelineHandle> MetalContext::createComputePipeline(const ComputeP
 }
 
 Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult) {
+  const MetalShaderModule* mesh = shaderModules_.get(desc.smMesh);
+  if (mesh && mesh->function) {
+    const MetalShaderModule* task = shaderModules_.get(desc.smTask);
+    const MetalShaderModule* meshFrag = shaderModules_.get(desc.smFrag);
+    NS::SharedPtr<MTL::MeshRenderPipelineDescriptor> mpd = ns::make<MTL::MeshRenderPipelineDescriptor>();
+    ns::setLabel(mpd.get(), desc.debugName);
+    NS::SharedPtr<MTL::Function> objFn = task && task->function ? specializeFunction(task, desc.specInfo) : NS::SharedPtr<MTL::Function>{};
+    NS::SharedPtr<MTL::Function> meshFn = specializeFunction(mesh, desc.specInfo);
+    NS::SharedPtr<MTL::Function> fragFn = meshFrag && meshFrag->function ? specializeFunction(meshFrag, desc.specInfo)
+                                                                         : NS::SharedPtr<MTL::Function>{};
+    if (objFn)
+      mpd->setObjectFunction(objFn.get());
+    mpd->setMeshFunction(meshFn.get());
+    if (fragFn)
+      mpd->setFragmentFunction(fragFn.get());
+    const uint32_t nColorMesh = desc.getNumColorAttachments();
+    for (uint32_t i = 0; i < nColorMesh; ++i) {
+      const ColorAttachment& ca = desc.color[i];
+      MTL::RenderPipelineColorAttachmentDescriptor* att = mpd->colorAttachments()->object(i);
+      att->setPixelFormat(toMTLPixelFormat(ca.format));
+      att->setBlendingEnabled(ca.blendEnabled);
+      att->setRgbBlendOperation(toMTLBlendOperation(ca.rgbBlendOp));
+      att->setAlphaBlendOperation(toMTLBlendOperation(ca.alphaBlendOp));
+      att->setSourceRGBBlendFactor(toMTLBlendFactor(ca.srcRGBBlendFactor));
+      att->setSourceAlphaBlendFactor(toMTLBlendFactor(ca.srcAlphaBlendFactor));
+      att->setDestinationRGBBlendFactor(toMTLBlendFactor(ca.dstRGBBlendFactor));
+      att->setDestinationAlphaBlendFactor(toMTLBlendFactor(ca.dstAlphaBlendFactor));
+    }
+    if (desc.depthFormat != Format_Invalid)
+      mpd->setDepthAttachmentPixelFormat(toMTLPixelFormat(desc.depthFormat));
+    mpd->setRasterSampleCount(desc.samplesCount ? desc.samplesCount : 1);
+    mpd->setAlphaToCoverageEnabled(desc.alphaToCoverage);
+    const MTL::Size objTG = task && task->function ? task->threadgroupSize : MTL::Size(1, 1, 1);
+    const MTL::Size meshTG = mesh->threadgroupSize;
+    if (objFn)
+      mpd->setMaxTotalThreadsPerObjectThreadgroup(objTG.width * objTG.height * objTG.depth);
+    mpd->setMaxTotalThreadsPerMeshThreadgroup(meshTG.width * meshTG.height * meshTG.depth);
+
+    NS::Error* meshError = nullptr;
+    NS::SharedPtr<MTL::RenderPipelineState> meshPipeline =
+        NS::TransferPtr(device_->newRenderPipelineState(mpd.get(), MTL::PipelineOptionNone, nullptr, &meshError));
+    if (!meshPipeline) {
+      LLOGE("createRenderPipeline (mesh) failed: %s", meshError ? meshError->localizedDescription()->utf8String() : "unknown");
+      Result::setResult(outResult, Result::Code::RuntimeError, "newRenderPipelineState (mesh) failed");
+      return {};
+    }
+    MetalRenderPipeline mp;
+    mp.pipeline = std::move(meshPipeline);
+    mp.cullMode = toMTLCullMode(desc.cullMode);
+    mp.frontFace = toMTLWinding(desc.frontFace);
+    mp.fillMode = toMTLFillMode(desc.polygonMode);
+    mp.isMesh = true;
+    mp.objectThreadsPerThreadgroup = objTG;
+    mp.meshThreadsPerThreadgroup = meshTG;
+    return {this, renderPipelines_.create(std::move(mp))};
+  }
+
   const MetalShaderModule* vert = shaderModules_.get(desc.smVert);
   const MetalShaderModule* frag = shaderModules_.get(desc.smFrag);
   if (!vert || !vert->function) {
@@ -1191,6 +1255,7 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
 
   isRendering_ = true;
   argTableOverridden_ = false;
+  currentRenderPipelineIsMesh_ = false;
   ctx_->setRenderEncoderOpen(true);
   bindArgumentTableInternal(ctx_->defaultArgumentTable());
 }
@@ -1214,6 +1279,12 @@ void CommandBuffer::cmdBindRenderPipeline(RenderPipelineHandle handle) {
   topology_ = p->topology;
   frontStencil_ = p->frontStencil;
   backStencil_ = p->backStencil;
+  meshObjectThreadsPerThreadgroup_ = p->objectThreadsPerThreadgroup;
+  meshThreadsPerThreadgroup_ = p->meshThreadsPerThreadgroup;
+  if (currentRenderPipelineIsMesh_ != p->isMesh) {
+    currentRenderPipelineIsMesh_ = p->isMesh;
+    bindArgumentTableInternal(currentArgTable_);
+  }
   depthStencilDirty_ = true;
 }
 
@@ -1225,10 +1296,15 @@ void CommandBuffer::endComputeEncoder() {
 }
 
 void CommandBuffer::setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table) {
-  if (computeEncoder_)
+  if (computeEncoder_) {
     computeEncoder_->setArgumentTable(table);
-  else if (encoder_)
-    encoder_->setArgumentTable(table, static_cast<MTL::RenderStages>(MTL::RenderStageVertex | MTL::RenderStageFragment));
+  } else if (encoder_) {
+    const MTL::RenderStages stages =
+        currentRenderPipelineIsMesh_
+            ? static_cast<MTL::RenderStages>(MTL::RenderStageMesh | MTL::RenderStageObject | MTL::RenderStageFragment)
+            : static_cast<MTL::RenderStages>(MTL::RenderStageVertex | MTL::RenderStageFragment);
+    encoder_->setArgumentTable(table, stages);
+  }
 }
 
 void CommandBuffer::cmdBindComputePipeline(ComputePipelineHandle handle) {
@@ -1340,6 +1416,14 @@ void CommandBuffer::cmdPushConstants(const void* data, size_t size, size_t offse
 void CommandBuffer::cmdDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t baseInstance) {
   applyDepthStencilState();
   encoder_->drawPrimitives(topology_, firstVertex, vertexCount, instanceCount, baseInstance);
+  resetArgumentTableIfOverridden();
+}
+
+void CommandBuffer::cmdDrawMeshTasks(const Dimensions& threadgroupCount) {
+  applyDepthStencilState();
+  encoder_->drawMeshThreadgroups(MTL::Size(threadgroupCount.width, threadgroupCount.height, threadgroupCount.depth),
+                                 meshObjectThreadsPerThreadgroup_,
+                                 meshThreadsPerThreadgroup_);
   resetArgumentTableIfOverridden();
 }
 

@@ -47,6 +47,9 @@ struct MetalRenderPipeline {
   MTL::TriangleFillMode fillMode = MTL::TriangleFillModeFill;
   StencilState frontStencil = {};
   StencilState backStencil = {};
+  bool isMesh = false;
+  MTL::Size objectThreadsPerThreadgroup = MTL::Size(1, 1, 1);
+  MTL::Size meshThreadsPerThreadgroup = MTL::Size(1, 1, 1);
 };
 
 struct MetalComputePipeline {
@@ -152,7 +155,7 @@ class CommandBuffer : public IMetalCommandBuffer {
                                    size_t countBufferOffset,
                                    uint32_t maxDrawCount,
                                    uint32_t stride = 0) override {}
-  void cmdDrawMeshTasks(const Dimensions& threadgroupCount) override {}
+  void cmdDrawMeshTasks(const Dimensions& threadgroupCount) override;
   void cmdDrawMeshTasksIndirect(BufferHandle indirectBuffer,
                                 size_t indirectBufferOffset,
                                 uint32_t drawCount,
@@ -201,6 +204,9 @@ class CommandBuffer : public IMetalCommandBuffer {
   MTL4::RenderCommandEncoder* encoder_ = nullptr;
   MTL4::ComputeCommandEncoder* computeEncoder_ = nullptr;
   MTL::Size computeThreadgroupSize_ = MTL::Size(16, 16, 1);
+  MTL::Size meshObjectThreadsPerThreadgroup_ = MTL::Size(1, 1, 1);
+  MTL::Size meshThreadsPerThreadgroup_ = MTL::Size(1, 1, 1);
+  bool currentRenderPipelineIsMesh_ = false;
   MTL::PrimitiveType topology_ = MTL::PrimitiveTypeTriangle;
   ArgumentTableHandle currentArgTable_;
   bool argTableOverridden_ = false;
@@ -268,6 +274,8 @@ class MetalContext : public IMetalContext {
 
   bool startGpuCapture(const char* outputPath) override;
   void stopGpuCapture() override;
+
+  void setShaderModuleMetadata(ShaderModuleHandle handle, const ShaderModuleMetadata& metadata) override;
 
   void destroy(ComputePipelineHandle handle) override;
   void destroy(RenderPipelineHandle handle) override;
