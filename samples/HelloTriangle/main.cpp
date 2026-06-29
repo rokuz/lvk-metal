@@ -1,6 +1,9 @@
 #include <cstdint>
 #include <cstdlib>
 
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 #include <lvk/LVK-Metal.h>
 
 #include "app_common.h"
@@ -13,17 +16,32 @@ static const char* kShaderMSL = R"(
 #include <metal_stdlib>
 using namespace metal;
 
+constant int kShape [[function_constant(0)]];
+
 struct VertexOut {
   float4 position [[position]];
   float4 color;
 };
 
 vertex VertexOut vertexMain(uint vid [[vertex_id]]) {
-  const float2 positions[3] = { float2(0.0, 0.6), float2(-0.6, -0.6), float2(0.6, -0.6) };
-  const float3 colors[3] = { float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0) };
+  float2 pos;
+  float3 col;
+  if (kShape == 1) {
+    const float2 p[6] = { float2(-0.6, -0.6), float2( 0.6, -0.6), float2( 0.6, 0.6),
+                          float2(-0.6, -0.6), float2( 0.6,  0.6), float2(-0.6, 0.6) };
+    const float3 c[6] = { float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0),
+                          float3(1.0, 0.0, 0.0), float3(0.0, 0.0, 1.0), float3(1.0, 1.0, 0.0) };
+    pos = p[vid];
+    col = c[vid];
+  } else {
+    const float2 p[3] = { float2(0.0, 0.6), float2(-0.6, -0.6), float2(0.6, -0.6) };
+    const float3 c[3] = { float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0) };
+    pos = p[vid];
+    col = c[vid];
+  }
   VertexOut out;
-  out.position = float4(positions[vid], 0.0, 1.0);
-  out.color = float4(colors[vid], 1.0);
+  out.position = float4(pos, 0.0, 1.0);
+  out.color = float4(col, 1.0);
   return out;
 }
 
@@ -34,9 +52,10 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]]) {
 
 class HelloTriangle final : public lvk::metal::ISample {
  public:
-  void init(lvk::metal::IMetalContext& ctx, GLFWwindow*, uint32_t width, uint32_t height, float displayScale, uint32_t) override {
+  void init(lvk::metal::IMetalContext& ctx, GLFWwindow* window, uint32_t width, uint32_t height, float, uint32_t) override {
     width_ = width;
     height_ = height;
+    window_ = window;
 
     lvk::Holder<lvk::ShaderModuleHandle> vert;
     lvk::Holder<lvk::ShaderModuleHandle> frag;
@@ -56,12 +75,29 @@ class HelloTriangle final : public lvk::metal::ISample {
       frag = ctx.createShaderModule({kShaderMSL, "fragmentMain", lvk::Stage_Frag, "triangle.frag"});
     }
 
-    pipeline_ = ctx.createRenderPipeline({
-        .smVert = vert,
-        .smFrag = frag,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
-        .debugName = "triangle",
-    });
+    int32_t shape = 0;
+    const auto makePipeline = [&](int32_t value) {
+      shape = value;
+      lvk::SpecializationConstantDesc spec = {};
+      spec.entries[0] = {.constantId = 0, .offset = 0, .size = sizeof(int32_t)};
+      spec.data = &shape;
+      spec.dataSize = sizeof(shape);
+      return ctx.createRenderPipeline({
+          .smVert = vert,
+          .smFrag = frag,
+          .specInfo = spec,
+          .color = {{.format = lvk::Format_BGRA_UN8}},
+          .debugName = value == 1 ? "quad" : "triangle",
+      });
+    };
+    pipelineTriangle_ = makePipeline(0);
+    pipelineQuad_ = makePipeline(1);
+
+    if (window_) {
+      glfwSetWindowUserPointer(window_, this);
+      glfwSetKeyCallback(window_, keyCallback);
+      LLOGL("HelloTriangle: press SPACE to toggle triangle/quad (specialization constant)");
+    }
   }
 
   void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float) override {
@@ -69,17 +105,28 @@ class HelloTriangle final : public lvk::metal::ISample {
         {.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {.float32 = {0.15f, 0.18f, 0.22f, 1.0f}}}}},
         {.color = {{.texture = target}}});
     cmd.cmdBindViewport({.width = float(width_), .height = float(height_)});
-    cmd.cmdBindRenderPipeline(pipeline_);
-    cmd.cmdDraw(3);
+    cmd.cmdBindRenderPipeline(drawQuad_ ? pipelineQuad_ : pipelineTriangle_);
+    cmd.cmdDraw(drawQuad_ ? 6 : 3);
     cmd.cmdEndRendering();
   }
 
   void destroy() override {
-    pipeline_.reset();
+    pipelineTriangle_.reset();
+    pipelineQuad_.reset();
   }
 
  private:
-  lvk::Holder<lvk::RenderPipelineHandle> pipeline_;
+  static void keyCallback(GLFWwindow* window, int key, int, int action, int) {
+    HelloTriangle* self = static_cast<HelloTriangle*>(glfwGetWindowUserPointer(window));
+    if (self && key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
+      self->drawQuad_ = !self->drawQuad_;
+    }
+  }
+
+  lvk::Holder<lvk::RenderPipelineHandle> pipelineTriangle_;
+  lvk::Holder<lvk::RenderPipelineHandle> pipelineQuad_;
+  GLFWwindow* window_ = nullptr;
+  bool drawQuad_ = false;
   uint32_t width_ = 0;
   uint32_t height_ = 0;
 };

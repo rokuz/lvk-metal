@@ -78,6 +78,7 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | GPU capture + debug labels | ✅ Implemented | |
 | MSL shaders | ✅ Implemented | Inline source or precompiled `metallib` |
 | Slang → MSL | ✅ Implemented | Compiled at runtime (sample-side `SlangRuntime`) |
+| Specialization constants | ✅ Implemented | Mapped to Metal function constants (`[[function_constant(N)]]`); types resolved via library reflection, `constantId` == the MSL index |
 | Layout transitions / barriers (`cmdTransitionTo*`) | ✅ Implemented | No-ops — Metal auto-tracks hazards (residency set + encoder barriers) |
 | Tessellation (`smTesc` / `smTese`, patch control points) | ⬜ Not implemented | Metal uses a different model (compute-generated factors + post-tessellation vertex function) |
 | Mesh / task shaders | ⬜ Not implemented | Metal has object/mesh shaders; not wired yet |

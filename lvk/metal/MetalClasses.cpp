@@ -640,6 +640,43 @@ Holder<ShaderModuleHandle> MetalContext::createShaderModule(const ShaderModuleDe
   return {this, shaderModules_.create(std::move(sm))};
 }
 
+NS::SharedPtr<MTL::Function> MetalContext::specializeFunction(const MetalShaderModule* sm, const SpecializationConstantDesc& spec) {
+  if (!sm || !sm->function)
+    return {};
+  const uint32_t numConstants = spec.getNumSpecializationConstants();
+  if (numConstants == 0 || !spec.data)
+    return sm->function;
+
+  std::unordered_map<uint32_t, MTL::DataType> typeByIndex;
+  if (NS::Dictionary* dict = sm->function->functionConstantsDictionary()) {
+    NS::Enumerator<NS::String>* keys = dict->keyEnumerator<NS::String>();
+    while (NS::String* key = keys->nextObject()) {
+      if (const MTL::FunctionConstant* fc = dict->object<MTL::FunctionConstant>(key))
+        typeByIndex[uint32_t(fc->index())] = fc->type();
+    }
+  }
+
+  NS::SharedPtr<MTL::FunctionConstantValues> values = ns::make<MTL::FunctionConstantValues>();
+  const uint8_t* base = static_cast<const uint8_t*>(spec.data);
+  for (uint32_t i = 0; i < numConstants; ++i) {
+    const SpecializationConstantEntry& e = spec.entries[i];
+    const std::unordered_map<uint32_t, MTL::DataType>::const_iterator it = typeByIndex.find(e.constantId);
+    if (it == typeByIndex.end())
+      continue;
+    values->setConstantValue(base + e.offset, it->second, NS::UInteger(e.constantId));
+  }
+
+  NS::Error* error = nullptr;
+  NS::SharedPtr<MTL::Function> fn = NS::TransferPtr(sm->library->newFunction(sm->function->name(), values.get(), &error));
+  if (!fn) {
+    LLOGE("specializeFunction '%s' failed: %s",
+          sm->function->name()->utf8String(),
+          error ? error->localizedDescription()->utf8String() : "unknown");
+    return sm->function;
+  }
+  return fn;
+}
+
 Holder<ComputePipelineHandle> MetalContext::createComputePipeline(const ComputePipelineDesc& desc, Result* outResult) {
   const MetalShaderModule* comp = shaderModules_.get(desc.smComp);
   if (!comp || !comp->function) {
@@ -647,7 +684,8 @@ Holder<ComputePipelineHandle> MetalContext::createComputePipeline(const ComputeP
     return {};
   }
   NS::Error* error = nullptr;
-  NS::SharedPtr<MTL::ComputePipelineState> pipeline = NS::TransferPtr(device_->newComputePipelineState(comp->function.get(), &error));
+  NS::SharedPtr<MTL::Function> compFn = specializeFunction(comp, desc.specInfo);
+  NS::SharedPtr<MTL::ComputePipelineState> pipeline = NS::TransferPtr(device_->newComputePipelineState(compFn.get(), &error));
   if (!pipeline) {
     LLOGE("createComputePipeline failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
     Result::setResult(outResult, Result::Code::RuntimeError, "newComputePipelineState failed");
@@ -669,9 +707,11 @@ Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipe
 
   NS::SharedPtr<MTL::RenderPipelineDescriptor> rpd = ns::make<MTL::RenderPipelineDescriptor>();
   ns::setLabel(rpd.get(), desc.debugName);
-  rpd->setVertexFunction(vert->function.get());
-  if (frag && frag->function)
-    rpd->setFragmentFunction(frag->function.get());
+  NS::SharedPtr<MTL::Function> vertFn = specializeFunction(vert, desc.specInfo);
+  NS::SharedPtr<MTL::Function> fragFn = frag && frag->function ? specializeFunction(frag, desc.specInfo) : NS::SharedPtr<MTL::Function>{};
+  rpd->setVertexFunction(vertFn.get());
+  if (fragFn)
+    rpd->setFragmentFunction(fragFn.get());
 
   const uint32_t nColor = desc.getNumColorAttachments();
   for (uint32_t i = 0; i < nColor; ++i) {

@@ -367,6 +367,7 @@ class MetalContext : public IMetalContext {
 
  private:
   NS::SharedPtr<MTL::DepthStencilState> makeDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
+  NS::SharedPtr<MTL::Function> specializeFunction(const MetalShaderModule* sm, const SpecializationConstantDesc& spec);
 
   [[nodiscard]] bool createDevice();
   [[nodiscard]] bool createQueue();
