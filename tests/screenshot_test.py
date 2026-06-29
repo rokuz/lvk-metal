@@ -18,6 +18,7 @@ SAMPLES = [
     ("RenderToCubeMapSinglePass", "samples/RenderToCubeMapSinglePass/RenderToCubeMapSinglePass", 30),
     ("SolarSystem", "samples/SolarSystem/SolarSystem", 120),
     ("ImGuiDemo", "samples/ImGuiDemo/ImGuiDemo", 1),
+    ("Bistro", "samples/Bistro/Bistro", 30),
 ]
 
 MODES = [
@@ -25,8 +26,8 @@ MODES = [
     ("slang", {"LVK_METAL_USE_SLANG": "1"}),
 ]
 
-WIDTH = 512
-HEIGHT = 512
+WIDTH = 1024
+HEIGHT = 768
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 

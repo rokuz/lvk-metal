@@ -48,6 +48,7 @@ bool writeScreenshotPNG(lvk::IContext& ctx, lvk::TextureHandle texture, uint32_t
 
   for (size_t i = 0; i < size_t(width) * size_t(height); ++i) {
     std::swap(pixels[i * 4 + 0], pixels[i * 4 + 2]);
+    pixels[i * 4 + 3] = 255;
   }
 
   if (!stbi_write_png(path, int(width), int(height), 4, pixels.data(), int(width) * 4)) {
