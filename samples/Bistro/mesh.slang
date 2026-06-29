@@ -1,10 +1,12 @@
 import lvk_metal_bindless;
 
 struct VertexData {
-  float3 position;
+  float px, py, pz;
   uint uv;
   uint16_t normal;
   uint16_t mtlIndex;
+
+  property float3 position { get { return float3(px, py, pz); } }
 };
 
 struct PerFrame {

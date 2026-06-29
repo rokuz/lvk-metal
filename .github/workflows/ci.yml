@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & screenshot tests (MSL + Slang)
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Add Homebrew to PATH
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
+      - name: Configure (Slang ON)
+        run: cmake -S . -B build -G Ninja -DLVK_METAL_WITH_SAMPLES_SLANG=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Deploy sample content (SolarSystem, Bistro)
+        working-directory: 3party/src/lightweightvk
+        run: python3 deploy_content.py
+
+      - name: Screenshot tests (MSL + Slang)
+        run: python3 tests/screenshot_test.py
+
+      - name: Upload screenshot deltas on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-deltas
+          path: build/_out/*.png
+          if-no-files-found: ignore

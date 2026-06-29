@@ -1,5 +1,7 @@
 # lvk-metal
 
+[![CI](https://github.com/rokuz/lvk-metal/actions/workflows/ci.yml/badge.svg)](https://github.com/rokuz/lvk-metal/actions/workflows/ci.yml)
+
 A thin, bindless-first **Metal 4** graphics wrapper built on [`metal-cpp`](https://developer.apple.com/metal/cpp/) and designed as an addon to [LightweightVK](https://github.com/corporateshark/lightweightvk) (lvk).
 
 ## Why

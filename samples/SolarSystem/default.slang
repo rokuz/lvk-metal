@@ -1,9 +1,13 @@
 import lvk_metal_bindless;
 
 struct Vertex {
-  float3 pos;
-  float2 uv;
-  float3 normal;
+  float px, py, pz;
+  float u, v;
+  float nx, ny, nz;
+
+  property float3 pos { get { return float3(px, py, pz); } }
+  property float3 normal { get { return float3(nx, ny, nz); } }
+  property float2 uv { get { return float2(u, v); } }
 };
 
 struct PerFrame {
