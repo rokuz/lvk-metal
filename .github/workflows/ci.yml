@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build & screenshot tests (MSL + Slang)
+    name: Build & screenshot tests
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Checkout
@@ -23,17 +23,32 @@ jobs:
       - name: Add Homebrew to PATH
         run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
 
-      - name: Configure (Slang ON)
-        run: cmake -S . -B build -G Ninja -DLVK_METAL_WITH_SAMPLES_SLANG=ON
+      - name: Install KosmicKrisp # LVK requirement
+        run: |
+          KK="$HOME/.cache/kosmickrisp/mesa-26.1.2"
+          if [ ! -f "$KK/lib/libvulkan.dylib" ]; then
+            mkdir -p "$KK"
+            curl -fsSL -o "$KK.zip" "https://github.com/rokuz/kosmickrisp-binaries/releases/download/mesa-mesa-26.1.2/kosmickrisp-macos-arm64.zip"
+            unzip -q -o "$KK.zip" -d "$KK"
+          fi
+          echo "KK_INCLUDE=$KK/deps/vulkan-headers/include" >> "$GITHUB_ENV"
+          echo "KK_LIB=$KK/lib/libvulkan.dylib" >> "$GITHUB_ENV"
+
+      - name: Configure (Slang ON, Vulkan via KosmicKrisp)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DLVK_METAL_WITH_SAMPLES_SLANG=ON
+          -DVulkan_INCLUDE_DIR="$KK_INCLUDE"
+          -DVulkan_LIBRARY="$KK_LIB"
 
       - name: Build
         run: cmake --build build
 
-      - name: Deploy sample content (SolarSystem, Bistro)
+      - name: Deploy sample content
         working-directory: 3party/src/lightweightvk
         run: python3 deploy_content.py
 
-      - name: Screenshot tests (MSL + Slang)
+      - name: Screenshot tests
         run: python3 tests/screenshot_test.py
 
       - name: Upload screenshot deltas on failure
