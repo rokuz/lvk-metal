@@ -192,14 +192,6 @@ class RenderToCubeMap final : public lvk::metal::ISample {
     cmd.cmdEndRendering();
   }
 
-  void destroy() override {
-    pipelineMesh_.reset();
-    pipelineTriangle_.reset();
-    linearSampler_.reset();
-    cubeMap_.reset();
-    ib_.reset();
-  }
-
  private:
   lvk::Holder<lvk::BufferHandle> ib_;
   lvk::Holder<lvk::TextureHandle> cubeMap_;

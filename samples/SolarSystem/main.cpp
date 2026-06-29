@@ -405,7 +405,10 @@ class SolarSystem final : public lvk::metal::ISample {
     createPipelines(ctx);
 
     skyTex_ = loadTextureCube(ctx, "starmap_4k.jpg");
-    sampler_ = ctx.createSampler({.minFilter = lvk::SamplerFilter_Linear, .magFilter = lvk::SamplerFilter_Linear, .debugName = "linear"});
+    sampler_ = ctx.createSampler({.minFilter = lvk::SamplerFilter_Linear,
+                                  .magFilter = lvk::SamplerFilter_Linear,
+                                  .mipMap = lvk::SamplerMip_Linear,
+                                  .debugName = "linear"});
 
     buildScene(ctx);
     buildBuffers(ctx);
@@ -955,8 +958,10 @@ class SolarSystem final : public lvk::metal::ISample {
         .format = lvk::Format_RGBA_UN8,
         .dimensions = {uint32_t(w), uint32_t(h)},
         .usage = lvk::TextureUsageBits_Sampled,
+        .numMipLevels = lvk::calcNumMipLevels(uint32_t(w), uint32_t(h)),
         .storage = lvk::StorageType_Device,
         .data = pixels,
+        .generateMipmaps = true,
         .debugName = name,
     });
     stbi_image_free(pixels);

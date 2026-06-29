@@ -7,6 +7,7 @@
 #include "lvk/metal/MetalMappings.h"
 #include "lvk/metal/MetalStagingDevice.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <dispatch/dispatch.h>
@@ -276,6 +277,46 @@ void MetalContext::waitDeferredTasks() {
   deferredTasks_.clear();
 }
 
+void MetalContext::growUploadRing(uint32_t minRegionBytes) {
+  static constexpr uint32_t kInitialRegionBytes = 256 * 1024;
+  uint32_t newRegionBytes = uploadRingFrameRegionBytes_ ? uploadRingFrameRegionBytes_ * 2 : kInitialRegionBytes;
+  while (newRegionBytes < minRegionBytes)
+    newRegionBytes *= 2;
+  NS::SharedPtr<MTL::Buffer> nb = NS::TransferPtr(
+      device_->newBuffer(NS::UInteger(MetalImmediateCommands::kMaxCommandBuffers) * newRegionBytes, MTL::ResourceStorageModeShared));
+  ns::setLabel(nb.get(), "lvk-metal.upload.ring");
+  if (uploadRing_)
+    retiredUploadRings_.push_back({uploadRing_, currentWrapper_->handle});
+  uploadRing_ = nb;
+  addResident(uploadRing_.get());
+  uploadRingFrameRegionBytes_ = newRegionBytes;
+  uploadRingCursor_ = currentWrapper_->bufferIndex * newRegionBytes;
+}
+
+MetalContext::StagingAlloc MetalContext::writeUploadStaging(const void* data, size_t size) {
+  LVK_ASSERT(currentWrapper_);
+  const uint32_t alignedSize = uint32_t((size + 15) & ~size_t(15));
+  const uint32_t regionEnd = (currentWrapper_->bufferIndex + 1) * uploadRingFrameRegionBytes_;
+  if (!uploadRing_ || uploadRingCursor_ + alignedSize > regionEnd)
+    growUploadRing(alignedSize);
+  const uint32_t slot = uploadRingCursor_;
+  std::memcpy(static_cast<uint8_t*>(uploadRing_->contents()) + slot, data, size);
+  uploadRingCursor_ += alignedSize;
+  return {uploadRing_.get(), slot};
+}
+
+void MetalContext::generateMipmapImmediate(MTL::Texture* texture) {
+  flushResidency();
+  const MetalImmediateCommands::CommandBufferWrapper& wrapper = immediate_->acquire();
+  MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
+  enc->barrierAfterQueueStages(MTL::StageBlit | MTL::StageDispatch, MTL::StageBlit, MTL4::VisibilityOptionDevice);
+  enc->generateMipmaps(texture);
+  enc->barrierAfterStages(
+      MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
+  immediate_->submit(wrapper);
+}
+
 void MetalContext::rebindArgumentTableHeaps() {
   for (MetalArgumentTable& at : argumentTables_.objects_) {
     if (!at.table)
@@ -394,10 +435,20 @@ IMetalCommandBuffer& MetalContext::acquireMetalCommandBuffer(bool) {
       ++i;
     }
   }
+  for (size_t i = 0; i < retiredUploadRings_.size();) {
+    if (immediate_->isReady(retiredUploadRings_[i].handle)) {
+      removeResident(retiredUploadRings_[i].buffer.get());
+      retiredUploadRings_[i] = retiredUploadRings_.back();
+      retiredUploadRings_.pop_back();
+    } else {
+      ++i;
+    }
+  }
   flushResidency();
   framePool_ = NS::AutoreleasePool::alloc()->init();
   currentWrapper_ = &immediate_->acquire();
   constantsCursor_ = currentWrapper_->bufferIndex * constantsFrameRegionBytes_;
+  uploadRingCursor_ = currentWrapper_->bufferIndex * uploadRingFrameRegionBytes_;
   return cmdBuffer_;
 }
 
@@ -488,6 +539,8 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
   if (desc.data) {
     const uint32_t depth = desc.type == TextureType_3D ? desc.dimensions.depth : 1;
     staging_->uploadTexture(texture.get(), 0, 0, 0, desc.dimensions.width, desc.dimensions.height, depth, 0, 0, desc.data, 0);
+    if (desc.generateMipmaps && desc.numMipLevels > 1)
+      generateMipmapImmediate(texture.get());
   }
 
   const MTL::ResourceID rid = texture->gpuResourceID();
@@ -1293,6 +1346,115 @@ void CommandBuffer::endComputeEncoder() {
     computeEncoder_->endEncoding();
     computeEncoder_ = nullptr;
   }
+}
+
+MTL4::ComputeCommandEncoder* CommandBuffer::beginTransferEncoder() {
+  LVK_ASSERT_MSG(!isRendering_, "transfer commands must be recorded outside cmdBeginRendering()/cmdEndRendering()");
+  endComputeEncoder();
+  return ctx_->commandBuffer()->computeCommandEncoder();
+}
+
+void CommandBuffer::cmdCopyBuffer(BufferHandle srcBuffer, BufferHandle dstBuffer, size_t srcOffset, size_t dstOffset, size_t size) {
+  const MetalBuffer* src = ctx_->getBuffer(srcBuffer);
+  const MetalBuffer* dst = ctx_->getBuffer(dstBuffer);
+  if (!src || !src->buffer || !dst || !dst->buffer)
+    return;
+  if (size == LVK_WHOLE_SIZE)
+    size = src->size - srcOffset;
+  MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
+  enc->copyFromBuffer(src->buffer.get(), srcOffset, dst->buffer.get(), dstOffset, size);
+  enc->barrierAfterStages(
+      MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
+}
+
+void CommandBuffer::cmdFillBuffer(BufferHandle buffer, size_t bufferOffset, size_t size, uint32_t data) {
+  const MetalBuffer* b = ctx_->getBuffer(buffer);
+  if (!b || !b->buffer)
+    return;
+  if (size == LVK_WHOLE_SIZE)
+    size = b->size - bufferOffset;
+  MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
+  enc->fillBuffer(b->buffer.get(), NS::Range(bufferOffset, size), static_cast<uint8_t>(data));
+  enc->barrierAfterStages(
+      MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
+}
+
+void CommandBuffer::cmdUpdateBuffer(BufferHandle buffer, size_t bufferOffset, size_t size, const void* data) {
+  const MetalBuffer* b = ctx_->getBuffer(buffer);
+  if (!b || !b->buffer || !data || !size)
+    return;
+  const MetalContext::StagingAlloc staging = ctx_->writeUploadStaging(data, size);
+  MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
+  enc->copyFromBuffer(staging.buffer, staging.offset, b->buffer.get(), bufferOffset, size);
+  enc->barrierAfterStages(
+      MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
+}
+
+void CommandBuffer::cmdClearColorImage(TextureHandle tex, const ClearColorValue& value, const TextureLayers& layers) {
+  const MetalImage* img = ctx_->getImage(tex);
+  if (!img || !img->texture)
+    return;
+  LVK_ASSERT_MSG(!isRendering_, "cmdClearColorImage() must be recorded outside cmdBeginRendering()/cmdEndRendering()");
+  endComputeEncoder();
+  const uint32_t numLayers = layers.numLayers ? layers.numLayers : 1;
+  for (uint32_t i = 0; i < numLayers; ++i) {
+    NS::SharedPtr<MTL4::RenderPassDescriptor> rpd = ns::make<MTL4::RenderPassDescriptor>();
+    MTL::RenderPassColorAttachmentDescriptor* att = rpd->colorAttachments()->object(0);
+    att->setTexture(img->texture.get());
+    att->setSlice(layers.layer + i);
+    att->setLevel(layers.mipLevel);
+    att->setLoadAction(MTL::LoadActionClear);
+    att->setStoreAction(MTL::StoreActionStore);
+    att->setClearColor(MTL::ClearColor(value.float32[0], value.float32[1], value.float32[2], value.float32[3]));
+    rpd->setRenderTargetWidth(std::max(1u, img->width >> layers.mipLevel));
+    rpd->setRenderTargetHeight(std::max(1u, img->height >> layers.mipLevel));
+    MTL4::RenderCommandEncoder* enc = ctx_->commandBuffer()->renderCommandEncoder(rpd.get());
+    enc->endEncoding();
+  }
+}
+
+void CommandBuffer::cmdCopyImage(TextureHandle src,
+                                 TextureHandle dst,
+                                 const Dimensions& extent,
+                                 const Offset3D& srcOffset,
+                                 const Offset3D& dstOffset,
+                                 const TextureLayers& srcLayers,
+                                 const TextureLayers& dstLayers) {
+  const MetalImage* s = ctx_->getImage(src);
+  const MetalImage* d = ctx_->getImage(dst);
+  if (!s || !s->texture || !d || !d->texture)
+    return;
+  const uint32_t numLayers = std::min(srcLayers.numLayers ? srcLayers.numLayers : 1, dstLayers.numLayers ? dstLayers.numLayers : 1);
+  const uint32_t depth = extent.depth ? extent.depth : 1;
+  MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
+  for (uint32_t i = 0; i < numLayers; ++i) {
+    enc->copyFromTexture(s->texture.get(),
+                         srcLayers.layer + i,
+                         srcLayers.mipLevel,
+                         MTL::Origin(uint32_t(srcOffset.x), uint32_t(srcOffset.y), uint32_t(srcOffset.z)),
+                         MTL::Size(extent.width, extent.height, depth),
+                         d->texture.get(),
+                         dstLayers.layer + i,
+                         dstLayers.mipLevel,
+                         MTL::Origin(uint32_t(dstOffset.x), uint32_t(dstOffset.y), uint32_t(dstOffset.z)));
+  }
+  enc->barrierAfterStages(
+      MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
+}
+
+void CommandBuffer::cmdGenerateMipmap(TextureHandle handle) {
+  const MetalImage* img = ctx_->getImage(handle);
+  if (!img || !img->texture)
+    return;
+  MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
+  enc->generateMipmaps(img->texture.get());
+  enc->barrierAfterStages(
+      MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
 }
 
 void CommandBuffer::setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table) {

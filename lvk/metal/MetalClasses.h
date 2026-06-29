@@ -137,9 +137,9 @@ class CommandBuffer : public IMetalCommandBuffer {
                           uint64_t bufferSize = LVK_WHOLE_SIZE) override;
   void cmdPushConstants(const void* data, size_t size, size_t offset = 0) override;
 
-  void cmdCopyBuffer(BufferHandle srcBuffer, BufferHandle dstBuffer, size_t srcOffset, size_t dstOffset, size_t size) override {}
-  void cmdFillBuffer(BufferHandle buffer, size_t bufferOffset, size_t size, uint32_t data) override {}
-  void cmdUpdateBuffer(BufferHandle buffer, size_t bufferOffset, size_t size, const void* data) override {}
+  void cmdCopyBuffer(BufferHandle srcBuffer, BufferHandle dstBuffer, size_t srcOffset, size_t dstOffset, size_t size) override;
+  void cmdFillBuffer(BufferHandle buffer, size_t bufferOffset, size_t size, uint32_t data) override;
+  void cmdUpdateBuffer(BufferHandle buffer, size_t bufferOffset, size_t size, const void* data) override;
 
   void cmdDraw(uint32_t vertexCount, uint32_t instanceCount = 1, uint32_t firstVertex = 0, uint32_t baseInstance = 0) override;
   void cmdDrawIndexed(uint32_t indexCount,
@@ -175,15 +175,15 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) override {}
   void cmdWriteTimestamp(QueryPoolHandle pool, uint32_t query) override {}
 
-  void cmdClearColorImage(TextureHandle tex, const ClearColorValue& value, const TextureLayers& layers = {}) override {}
+  void cmdClearColorImage(TextureHandle tex, const ClearColorValue& value, const TextureLayers& layers = {}) override;
   void cmdCopyImage(TextureHandle src,
                     TextureHandle dst,
                     const Dimensions& extent,
                     const Offset3D& srcOffset = {},
                     const Offset3D& dstOffset = {},
                     const TextureLayers& srcLayers = {},
-                    const TextureLayers& dstLayers = {}) override {}
-  void cmdGenerateMipmap(TextureHandle handle) override {}
+                    const TextureLayers& dstLayers = {}) override;
+  void cmdGenerateMipmap(TextureHandle handle) override;
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override {}
 
   void cmdBindArgumentTable(ArgumentTableHandle handle) override;
@@ -198,6 +198,7 @@ class CommandBuffer : public IMetalCommandBuffer {
   void resetArgumentTableIfOverridden();
   void setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table);
   void endComputeEncoder();
+  MTL4::ComputeCommandEncoder* beginTransferEncoder();
   void applyDepthStencilState();
 
   MetalContext* ctx_ = nullptr;
@@ -373,7 +374,15 @@ class MetalContext : public IMetalContext {
   MTL::GPUAddress writePushConstants(const void* data, size_t size, size_t offset);
   MTL::DepthStencilState* getDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
 
+  struct StagingAlloc {
+    MTL::Buffer* buffer = nullptr;
+    uint32_t offset = 0;
+  };
+  StagingAlloc writeUploadStaging(const void* data, size_t size);
+
  private:
+  void growUploadRing(uint32_t minRegionBytes);
+  void generateMipmapImmediate(MTL::Texture* texture);
   NS::SharedPtr<MTL::DepthStencilState> makeDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
   NS::SharedPtr<MTL::Function> specializeFunction(const MetalShaderModule* sm, const SpecializationConstantDesc& spec);
 
@@ -429,11 +438,16 @@ class MetalContext : public IMetalContext {
   uint32_t constantsFrameRegionBytes_ = 0;
   uint32_t constantsCursor_ = 0;
 
+  NS::SharedPtr<MTL::Buffer> uploadRing_;
+  uint32_t uploadRingFrameRegionBytes_ = 0;
+  uint32_t uploadRingCursor_ = 0;
+
   struct RetiredBuffer {
     NS::SharedPtr<MTL::Buffer> buffer;
     SubmitHandle handle;
   };
   std::vector<RetiredBuffer> retiredConstantRings_;
+  std::vector<RetiredBuffer> retiredUploadRings_;
 
   struct DeferredTask {
     std::function<void()> task_;

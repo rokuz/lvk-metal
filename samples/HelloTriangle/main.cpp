@@ -110,11 +110,6 @@ class HelloTriangle final : public lvk::metal::ISample {
     cmd.cmdEndRendering();
   }
 
-  void destroy() override {
-    pipelineTriangle_.reset();
-    pipelineQuad_.reset();
-  }
-
  private:
   static void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     HelloTriangle* self = static_cast<HelloTriangle*>(glfwGetWindowUserPointer(window));

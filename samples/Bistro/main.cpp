@@ -539,14 +539,11 @@ class Bistro final : public lvk::metal::ISample {
       loaderPool_->wait_for_all();
       loaderPool_.reset();
     }
-    imgui_.reset();
-    texturesCache_.clear();
     for (LoadedImage& img : ownedPixels_) {
       if (img.pixels) {
         stbi_image_free(img.pixels);
       }
     }
-    ownedPixels_.clear();
   }
 
  private:
@@ -911,8 +908,10 @@ class Bistro final : public lvk::metal::ISample {
         .format = img.channels == 1 ? lvk::Format_R_UN8 : lvk::Format_RGBA_UN8,
         .dimensions = {img.w, img.h},
         .usage = lvk::TextureUsageBits_Sampled,
+        .numMipLevels = lvk::calcNumMipLevels(img.w, img.h),
         .storage = lvk::StorageType_Device,
         .data = img.pixels,
+        .generateMipmaps = true,
         .debugName = img.debugName.c_str(),
     });
     const lvk::TextureHandle handle = tex;

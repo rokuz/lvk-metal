@@ -53,6 +53,7 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | Demo | Screenshot |
 | --- | --- |
 | **HelloTriangle** — minimal triangle | <img src="tests/references/HelloTriangle.png" width="320"> |
+| **TransferOps** — blit-encoder buffer copy/fill/update + image clear/copy, all feeding one textured quad | <img src="tests/references/TransferOps.png" width="320"> |
 | **MeshShaders** — a triangle emitted by an object + mesh shader | <img src="tests/references/MeshShaders.png" width="320"> |
 | **MeshShaderFireworks** — GPU-billboarded particle fireworks via a mesh shader, additive blending | <img src="tests/references/MeshShaderFireworks.png" width="320"> |
 | **RenderToCubeMap** — render a scene into a cubemap, then sample it | <img src="tests/references/RenderToCubeMap.png" width="320"> |
@@ -88,8 +89,8 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | Mesh / task shaders | ✅ Implemented | Mapped to Metal object/mesh shaders + `drawMeshThreadgroups`; threadgroup size via a `clang::annotate("lvk_numthreads(...)")` attribute (MSL) or Slang reflection. See the `MeshShaders` and `MeshShaderFireworks` samples |
 | Ray tracing — pipelines, acceleration structures, `cmdTraceRays`, TLAS | ⬜ Not implemented | Fully implemented in LVK (the `RTX_*` samples); Metal supports RT (`MTLAccelerationStructure`, intersectors), not wired here yet |
 | Indirect draws (`cmdDrawIndirect*`) | ⬜ Not implemented | Metal supports indirect draws / indirect command buffers |
-| Buffer copy / fill / update | ⬜ Not implemented | Metal blit encoder |
-| Image copy / clear / mipmap generation | ⬜ Not implemented | Metal blit encoder |
+| Buffer copy / fill / update | ✅ Implemented | `cmdCopyBuffer` / `cmdFillBuffer` / `cmdUpdateBuffer` via the MTL4 compute (blit) encoder; `cmdUpdateBuffer` stages through a per-frame ring (Metal 4 has no inline `vkCmdUpdateBuffer`). `cmdFillBuffer` fills the low byte of `data` (Metal fills a byte). See the `TransferOps` sample |
+| Image copy / clear / mipmap generation | ✅ Implemented | `cmdCopyImage` (`copyFromTexture`), `cmdGenerateMipmap` (`generateMipmaps`), and `generateMipmaps` in `createTexture`; `cmdClearColorImage` via a clear-only render pass (needs an attachment-capable texture). Mipmaps exercised by `SolarSystem`/`Bistro`, copy/clear by `TransferOps` |
 | Texture views | ⬜ Not implemented | `newTextureView` |
 | Query pools / timestamps | ⬜ Not implemented | Metal counter sampling |
 | YUV textures | ⬜ Not implemented | Metal biplanar YUV formats |

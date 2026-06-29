@@ -791,19 +791,6 @@ class MeshShaderFireworks final : public lvk::metal::ISample {
     cmd.cmdEndRendering();
   }
 
-  void destroy() override {
-    imgui_.reset();
-    pipeline_.reset();
-    texture_.reset();
-    sampler_.reset();
-    for (lvk::Holder<lvk::BufferHandle>& vb : vb_) {
-      vb.reset();
-    }
-    for (lvk::Holder<lvk::BufferHandle>& buf : bufPerFrame_) {
-      buf.reset();
-    }
-  }
-
  private:
   static void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     if (action != GLFW_PRESS || ImGui::GetIO().WantCaptureKeyboard) {

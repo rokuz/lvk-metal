@@ -98,10 +98,6 @@ class MeshShaders final : public lvk::metal::ISample {
     cmd.cmdEndRendering();
   }
 
-  void destroy() override {
-    pipeline_.reset();
-  }
-
  private:
   lvk::Holder<lvk::RenderPipelineHandle> pipeline_;
   uint32_t width_ = 0;

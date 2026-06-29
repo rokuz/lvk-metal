@@ -37,10 +37,6 @@ class ImGuiDemo final : public lvk::metal::ISample {
     cmd.cmdEndRendering();
   }
 
-  void destroy() override {
-    imgui_.reset();
-  }
-
  private:
   std::unique_ptr<lvk::metal::ImGuiRenderer> imgui_;
   uint32_t width_ = 0;
