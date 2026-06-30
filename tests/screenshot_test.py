@@ -15,6 +15,7 @@ REF_DIR = os.path.join(HERE, "references")
 SAMPLES = [
     ("HelloTriangle", "samples/HelloTriangle/HelloTriangle", 1),
     ("TransferOps", "samples/TransferOps/TransferOps", 1),
+    ("IndirectDraws", "samples/IndirectDraws/IndirectDraws", 1),
     ("MeshShaders", "samples/MeshShaders/MeshShaders", 1),
     ("MeshShaderFireworks", "samples/MeshShaderFireworks/MeshShaderFireworks", 650),
     ("RenderToCubeMap", "samples/RenderToCubeMap/RenderToCubeMap", 30),

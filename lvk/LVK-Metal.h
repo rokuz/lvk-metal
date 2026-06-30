@@ -64,6 +64,13 @@ struct ShaderModuleMetadata {
   Dimensions threadgroupSize = {1, 1, 1};
 };
 
+struct IndirectBufferMetadata {
+  BufferHandle primitiveTypes = {};
+  BufferHandle indexBuffer = {};
+  IndexFormat indexFormat = IndexFormat_UI32;
+  BufferHandle meshThreadgroupSizes = {};
+};
+
 class IMetalCommandBuffer : public lvk::ICommandBuffer {
  public:
   virtual void cmdBindArgumentTable(ArgumentTableHandle handle) = 0;
@@ -87,6 +94,8 @@ class IMetalContext : public lvk::IContext {
   virtual void stopGpuCapture() = 0;
 
   virtual void setShaderModuleMetadata(ShaderModuleHandle handle, const ShaderModuleMetadata& metadata) = 0;
+
+  virtual void setIndirectBufferMetadata(BufferHandle indirectBuffer, const IndirectBufferMetadata& metadata) = 0;
 };
 
 std::unique_ptr<IMetalContext> createContextWithMetalLayer(CA::MetalLayer* layer,

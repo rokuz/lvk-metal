@@ -54,6 +54,7 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | --- | --- |
 | **HelloTriangle** — minimal triangle | <img src="tests/references/HelloTriangle.png" width="320"> |
 | **TransferOps** — blit-encoder buffer copy/fill/update + image clear/copy, all feeding one textured quad | <img src="tests/references/TransferOps.png" width="320"> |
+| **IndirectDraws** — GPU-driven multi-draw indirect, one row per method: `cmdDrawIndirect` (top, compute-filled args + per-draw primitive types), `cmdDrawIndexedIndirect` (middle), `cmdDrawMeshTasksIndirect` (bottom) | <img src="tests/references/IndirectDraws.png" width="320"> |
 | **MeshShaders** — a triangle emitted by an object + mesh shader | <img src="tests/references/MeshShaders.png" width="320"> |
 | **MeshShaderFireworks** — GPU-billboarded particle fireworks via a mesh shader, additive blending | <img src="tests/references/MeshShaderFireworks.png" width="320"> |
 | **RenderToCubeMap** — render a scene into a cubemap, then sample it | <img src="tests/references/RenderToCubeMap.png" width="320"> |
@@ -85,22 +86,22 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | Slang → MSL | ✅ Implemented | Compiled at runtime (sample-side `SlangRuntime`) |
 | Specialization constants | ✅ Implemented | Mapped to Metal function constants (`[[function_constant(N)]]`); types resolved via library reflection, `constantId` == the MSL index |
 | Layout transitions / barriers (`cmdTransitionTo*`) | ✅ Implemented | No-ops — Metal auto-tracks hazards (residency set + encoder barriers) |
-| Tessellation (`smTesc` / `smTese`, patch control points) | ⬜ Not implemented | Metal uses a different model (compute-generated factors + post-tessellation vertex function) |
 | Mesh / task shaders | ✅ Implemented | Mapped to Metal object/mesh shaders + `drawMeshThreadgroups`; threadgroup size via a `clang::annotate("lvk_numthreads(...)")` attribute (MSL) or Slang reflection. See the `MeshShaders` and `MeshShaderFireworks` samples |
-| Ray tracing — pipelines, acceleration structures, `cmdTraceRays`, TLAS | ⬜ Not implemented | Fully implemented in LVK (the `RTX_*` samples); Metal supports RT (`MTLAccelerationStructure`, intersectors), not wired here yet |
-| Indirect draws (`cmdDrawIndirect*`) | ⬜ Not implemented | Metal supports indirect draws / indirect command buffers |
+| Indirect draws (`cmdDrawIndirect`, `cmdDrawIndexedIndirect`, `cmdDrawMeshTasksIndirect`) | ✅ Implemented | True GPU multi-draw with **no CPU loop**: pass the compute-filled args buffer (`BufferUsageBits_Indirect`) as a `cmdBeginRendering` dependency, and the wrapper runs an internal MSL kernel that encodes a `MTLIndirectCommandBuffer` from it; the draw issues the range with one `executeCommandsInBuffer` (`drawCount==1` skips the ICB and uses a native indirect draw). Per-draw primitive type, the index buffer (indexed), and mesh threadgroup sizes are supplied via `IMetalContext::setIndirectBufferMetadata`. See the `IndirectDraws` sample. The GPU-count variants (`cmdDrawIndexedIndirectCount` / `cmdDrawMeshTasksIndirectCount`) are ⛔ unsupported — a GPU-side count buffer can't be resolved at the `cmdBeginRendering` encode point; the validation layer warns and they no-op |
 | Buffer copy / fill / update | ✅ Implemented | `cmdCopyBuffer` / `cmdFillBuffer` / `cmdUpdateBuffer` via the MTL4 compute (blit) encoder; `cmdUpdateBuffer` stages through a per-frame ring (Metal 4 has no inline `vkCmdUpdateBuffer`). `cmdFillBuffer` fills the low byte of `data` (Metal fills a byte). See the `TransferOps` sample |
 | Image copy / clear / mipmap generation | ✅ Implemented | `cmdCopyImage` (`copyFromTexture`), `cmdGenerateMipmap` (`generateMipmaps`), and `generateMipmaps` in `createTexture`; `cmdClearColorImage` via a clear-only render pass (needs an attachment-capable texture). Mipmaps exercised by `SolarSystem`/`Bistro`, copy/clear by `TransferOps` |
+| Ray tracing — pipelines, acceleration structures, `cmdTraceRays`, TLAS | ⬜ Not implemented | Fully implemented in LVK (the `RTX_*` samples); Metal supports RT (`MTLAccelerationStructure`, intersectors), not wired here yet |
 | Texture views | ⬜ Not implemented | `newTextureView` |
 | Query pools / timestamps | ⬜ Not implemented | Metal counter sampling |
 | YUV textures | ⬜ Not implemented | Metal biplanar YUV formats |
 | Async-compute queue | ⬜ Not implemented | Single queue today; Metal allows several |
 | HDR / EDR swapchain | ⬜ Not implemented | Only sRGB gamma is wired; EDR not exposed |
 | Render-pass subpasses (`cmdNextSubpass`, input attachments) | ⬜ Not implemented | Metal favors single-pass tile memory / programmable blending |
+| Tessellation pipeline | ⛔ Unsupported | By design (won't be added) — use mesh shaders instead |
 | SPIR-V shader ingestion | ⛔ Unsupported | Deliberate — author in MSL or Slang |
 | Binding vertex buffers / vertex input | ⛔ Unsupported | By design (won't be added) — bindless vertex pulling via GPU address |
 | Multiview (`viewMask`, `layerCount`) | ⛔ Unsupported | By design (won't be added); Metal could express it via vertex amplification |
-| Geometry shaders | ⛔ Unsupported | Metal has no geometry stage — use mesh shaders / vertex amplification |
+| Geometry shaders | ⛔ Unsupported | Metal has no geometry stage — use mesh shaders |
 | Minimum sample shading | ⛔ Unsupported | No Metal API; per-sample execution is shader-driven (`[[sample_id]]`) |
 
 ## License

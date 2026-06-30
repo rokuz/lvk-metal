@@ -490,6 +490,252 @@ void MetalContext::wait(SubmitHandle handle) {
   immediate_->wait(handle);
 }
 
+static const char* kIndirectEncodeMSL = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct LvkDrawArgs {
+  uint vertexCount;
+  uint instanceCount;
+  uint vertexStart;
+  uint baseInstance;
+};
+
+struct LvkICBContainer {
+  command_buffer cmd [[id(0)]];
+};
+
+struct LvkEncodeParams {
+  uint commandCount;
+};
+
+kernel void lvkEncodeIndirectDraws(uint tid [[thread_position_in_grid]],
+                                   constant LvkEncodeParams& params [[buffer(0)]],
+                                   device const LvkDrawArgs* args [[buffer(1)]],
+                                   device LvkICBContainer& icb [[buffer(2)]]) {
+  if (tid >= params.commandCount) {
+    return;
+  }
+  const LvkDrawArgs a = args[tid];
+  render_command cmd(icb.cmd, tid);
+  cmd.draw_primitives(primitive_type::triangle, a.vertexStart, a.vertexCount, a.instanceCount, a.baseInstance);
+}
+
+kernel void lvkEncodeIndirectDrawsTyped(uint tid [[thread_position_in_grid]],
+                                        constant LvkEncodeParams& params [[buffer(0)]],
+                                        device const LvkDrawArgs* args [[buffer(1)]],
+                                        device LvkICBContainer& icb [[buffer(2)]],
+                                        device const uint* primitiveTypes [[buffer(3)]]) {
+  if (tid >= params.commandCount) {
+    return;
+  }
+  const LvkDrawArgs a = args[tid];
+  render_command cmd(icb.cmd, tid);
+  cmd.draw_primitives(primitive_type(primitiveTypes[tid]), a.vertexStart, a.vertexCount, a.instanceCount, a.baseInstance);
+}
+
+struct LvkDrawIndexedArgs {
+  uint indexCount;
+  uint instanceCount;
+  uint indexStart;
+  int  baseVertex;
+  uint baseInstance;
+};
+
+kernel void lvkEncodeIndexed16(uint tid [[thread_position_in_grid]],
+                               constant LvkEncodeParams& params [[buffer(0)]],
+                               device const LvkDrawIndexedArgs* args [[buffer(1)]],
+                               device LvkICBContainer& icb [[buffer(2)]],
+                               device const ushort* indexBuffer [[buffer(4)]]) {
+  if (tid >= params.commandCount) {
+    return;
+  }
+  const LvkDrawIndexedArgs a = args[tid];
+  render_command cmd(icb.cmd, tid);
+  cmd.draw_indexed_primitives(
+      primitive_type::triangle, a.indexCount, indexBuffer + a.indexStart, a.instanceCount, a.baseVertex, a.baseInstance);
+}
+
+kernel void lvkEncodeIndexed32(uint tid [[thread_position_in_grid]],
+                               constant LvkEncodeParams& params [[buffer(0)]],
+                               device const LvkDrawIndexedArgs* args [[buffer(1)]],
+                               device LvkICBContainer& icb [[buffer(2)]],
+                               device const uint* indexBuffer [[buffer(4)]]) {
+  if (tid >= params.commandCount) {
+    return;
+  }
+  const LvkDrawIndexedArgs a = args[tid];
+  render_command cmd(icb.cmd, tid);
+  cmd.draw_indexed_primitives(
+      primitive_type::triangle, a.indexCount, indexBuffer + a.indexStart, a.instanceCount, a.baseVertex, a.baseInstance);
+}
+
+kernel void lvkEncodeIndexed16Typed(uint tid [[thread_position_in_grid]],
+                                    constant LvkEncodeParams& params [[buffer(0)]],
+                                    device const LvkDrawIndexedArgs* args [[buffer(1)]],
+                                    device LvkICBContainer& icb [[buffer(2)]],
+                                    device const uint* primitiveTypes [[buffer(3)]],
+                                    device const ushort* indexBuffer [[buffer(4)]]) {
+  if (tid >= params.commandCount) {
+    return;
+  }
+  const LvkDrawIndexedArgs a = args[tid];
+  render_command cmd(icb.cmd, tid);
+  cmd.draw_indexed_primitives(
+      primitive_type(primitiveTypes[tid]), a.indexCount, indexBuffer + a.indexStart, a.instanceCount, a.baseVertex, a.baseInstance);
+}
+
+kernel void lvkEncodeIndexed32Typed(uint tid [[thread_position_in_grid]],
+                                    constant LvkEncodeParams& params [[buffer(0)]],
+                                    device const LvkDrawIndexedArgs* args [[buffer(1)]],
+                                    device LvkICBContainer& icb [[buffer(2)]],
+                                    device const uint* primitiveTypes [[buffer(3)]],
+                                    device const uint* indexBuffer [[buffer(4)]]) {
+  if (tid >= params.commandCount) {
+    return;
+  }
+  const LvkDrawIndexedArgs a = args[tid];
+  render_command cmd(icb.cmd, tid);
+  cmd.draw_indexed_primitives(
+      primitive_type(primitiveTypes[tid]), a.indexCount, indexBuffer + a.indexStart, a.instanceCount, a.baseVertex, a.baseInstance);
+}
+
+struct LvkMeshArgs {
+  uint groupCountX;
+  uint groupCountY;
+  uint groupCountZ;
+};
+
+struct LvkMeshThreadgroups {
+  packed_uint3 object;
+  packed_uint3 mesh;
+};
+
+kernel void lvkEncodeMeshTasks(uint tid [[thread_position_in_grid]],
+                               constant LvkEncodeParams& params [[buffer(0)]],
+                               device const LvkMeshArgs* args [[buffer(1)]],
+                               device LvkICBContainer& icb [[buffer(2)]],
+                               device const LvkMeshThreadgroups* tg [[buffer(3)]]) {
+  if (tid >= params.commandCount) {
+    return;
+  }
+  const LvkMeshArgs a = args[tid];
+  render_command cmd(icb.cmd, tid);
+  cmd.draw_mesh_threadgroups(uint3(a.groupCountX, a.groupCountY, a.groupCountZ), uint3(tg->object), uint3(tg->mesh));
+}
+)";
+
+void MetalContext::createIndirectCommandBufferFor(MetalBuffer& mb, uint32_t elementStride) {
+  const uint32_t capacity = uint32_t(mb.size / elementStride);
+  if (!capacity)
+    return;
+  NS::SharedPtr<MTL::IndirectCommandBufferDescriptor> icbDesc = ns::make<MTL::IndirectCommandBufferDescriptor>();
+  icbDesc->setCommandTypes(MTL::IndirectCommandTypeDraw | MTL::IndirectCommandTypeDrawIndexed |
+                           MTL::IndirectCommandTypeDrawMeshThreadgroups);
+  icbDesc->setInheritPipelineState(true);
+  icbDesc->setInheritBuffers(true);
+  icbDesc->setMaxVertexBufferBindCount(0);
+  icbDesc->setMaxFragmentBufferBindCount(0);
+  mb.icb = NS::TransferPtr(device_->newIndirectCommandBuffer(icbDesc.get(), capacity, MTL::ResourceStorageModePrivate));
+  if (!mb.icb)
+    return;
+  ns::setLabel(mb.icb.get(), "lvk-metal.icb");
+  mb.icbCapacity = capacity;
+  addResident(mb.icb.get());
+
+  mb.icbContainer = NS::TransferPtr(device_->newBuffer(sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
+  ns::setLabel(mb.icbContainer.get(), "lvk-metal.icb.container");
+  *static_cast<MTL::ResourceID*>(mb.icbContainer->contents()) = mb.icb->gpuResourceID();
+  addResident(mb.icbContainer.get());
+}
+
+bool MetalContext::ensureIndirectEncoder() {
+  if (icbEncodePipeline_ && icbEncodeArgTable_)
+    return true;
+  NS::Error* error = nullptr;
+  NS::SharedPtr<MTL::Library> lib = NS::TransferPtr(device_->newLibrary(ns::string(kIndirectEncodeMSL), nullptr, &error));
+  if (!lib) {
+    LLOGE("ICB encode library failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    return false;
+  }
+  const auto makePipeline = [&](const char* entry) -> NS::SharedPtr<MTL::ComputePipelineState> {
+    NS::SharedPtr<MTL::Function> fn = NS::TransferPtr(lib->newFunction(ns::string(entry)));
+    NS::Error* err = nullptr;
+    NS::SharedPtr<MTL::ComputePipelineState> p = fn ? NS::TransferPtr(device_->newComputePipelineState(fn.get(), &err)) : nullptr;
+    if (!p)
+      LLOGE("ICB encode pipeline '%s' failed: %s", entry, err ? err->localizedDescription()->utf8String() : "unknown");
+    return p;
+  };
+  icbEncodePipeline_ = makePipeline("lvkEncodeIndirectDraws");
+  icbEncodePipelineTyped_ = makePipeline("lvkEncodeIndirectDrawsTyped");
+  icbEncodeIndexed16_ = makePipeline("lvkEncodeIndexed16");
+  icbEncodeIndexed16Typed_ = makePipeline("lvkEncodeIndexed16Typed");
+  icbEncodeIndexed32_ = makePipeline("lvkEncodeIndexed32");
+  icbEncodeIndexed32Typed_ = makePipeline("lvkEncodeIndexed32Typed");
+  icbEncodeMesh_ = makePipeline("lvkEncodeMeshTasks");
+  if (!icbEncodePipeline_ || !icbEncodePipelineTyped_ || !icbEncodeIndexed16_ || !icbEncodeIndexed16Typed_ || !icbEncodeIndexed32_ ||
+      !icbEncodeIndexed32Typed_ || !icbEncodeMesh_)
+    return false;
+  NS::SharedPtr<MTL4::ArgumentTableDescriptor> atd = ns::make<MTL4::ArgumentTableDescriptor>();
+  atd->setMaxBufferBindCount(5);
+  ns::setLabel(atd.get(), "lvk-metal.icb.encode.argtable");
+  icbEncodeArgTable_ = NS::TransferPtr(device_->newArgumentTable(atd.get(), &error));
+  if (!icbEncodeArgTable_) {
+    LLOGE("ICB encode argtable failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    return false;
+  }
+  return true;
+}
+
+void MetalContext::encodeIndirectDraws(const Dependencies& deps) {
+  MTL4::ComputeCommandEncoder* enc = nullptr;
+  for (size_t i = 0; i < deps.buffers.size(); ++i) {
+    const MetalBuffer* b = buffers_.get(deps.buffers[i]);
+    if (!b || !b->icb || !(b->usage & BufferUsageBits_Indirect))
+      continue;
+    if (!ensureIndirectEncoder())
+      return;
+    if (!enc) {
+      enc = commandBuffer()->computeCommandEncoder();
+      enc->barrierAfterQueueStages(MTL::StageDispatch, MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+    }
+    const MetalBuffer* meshTg = b->icbMeshThreadgroupSizes.empty() ? nullptr : buffers_.get(b->icbMeshThreadgroupSizes);
+    const MetalBuffer* indexBuf = b->icbIndexBuffer.empty() ? nullptr : buffers_.get(b->icbIndexBuffer);
+    const MetalBuffer* primTypes = b->icbPrimitiveTypes.empty() ? nullptr : buffers_.get(b->icbPrimitiveTypes);
+    const bool typed = primTypes != nullptr;
+    const uint32_t stride = meshTg ? 12u : (indexBuf ? 20u : 16u);
+    const uint32_t count = uint32_t(b->size / stride);
+    const MTL::GPUAddress paramsAddr = writePushConstants(&count, sizeof(count), 0);
+    icbEncodeArgTable_->setAddress(paramsAddr, 0);
+    icbEncodeArgTable_->setAddress(b->buffer->gpuAddress(), 1);
+    icbEncodeArgTable_->setAddress(b->icbContainer->gpuAddress(), 2);
+    MTL::ComputePipelineState* pipeline = nullptr;
+    if (meshTg) {
+      icbEncodeArgTable_->setAddress(meshTg->buffer->gpuAddress(), 3);
+      pipeline = icbEncodeMesh_.get();
+    } else if (indexBuf) {
+      if (typed)
+        icbEncodeArgTable_->setAddress(primTypes->buffer->gpuAddress(), 3);
+      icbEncodeArgTable_->setAddress(indexBuf->buffer->gpuAddress(), 4);
+      const bool is16 = b->icbIndexFormat == IndexFormat_UI16;
+      pipeline =
+          (is16 ? (typed ? icbEncodeIndexed16Typed_ : icbEncodeIndexed16_) : (typed ? icbEncodeIndexed32Typed_ : icbEncodeIndexed32_))
+              .get();
+    } else {
+      if (typed)
+        icbEncodeArgTable_->setAddress(primTypes->buffer->gpuAddress(), 3);
+      pipeline = (typed ? icbEncodePipelineTyped_ : icbEncodePipeline_).get();
+    }
+    enc->setComputePipelineState(pipeline);
+    enc->setArgumentTable(icbEncodeArgTable_.get());
+    enc->dispatchThreads(MTL::Size(count, 1, 1), MTL::Size(32, 1, 1));
+  }
+  if (enc) {
+    enc->barrierAfterStages(MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+    enc->endEncoding();
+  }
+}
+
 Holder<BufferHandle> MetalContext::createBuffer(const BufferDesc& desc, const char* debugName, Result* outResult) {
   NS::SharedPtr<MTL::Buffer> buffer = NS::TransferPtr(device_->newBuffer(desc.size, toMTLBufferResourceOptions(desc.storage)));
   if (!buffer) {
@@ -509,6 +755,9 @@ Holder<BufferHandle> MetalContext::createBuffer(const BufferDesc& desc, const ch
   MetalBuffer mb;
   mb.buffer = std::move(buffer);
   mb.size = desc.size;
+  mb.usage = desc.usage;
+  if (desc.usage & BufferUsageBits_Indirect)
+    createIndirectCommandBufferFor(mb, 16);
   const BufferHandle handle = buffers_.create(std::move(mb));
   ensureBufferCapacity(handle.index());
   static_cast<MTL::GPUAddress*>(bufferHeap_->contents())[handle.index()] = address;
@@ -700,6 +949,25 @@ void MetalContext::setShaderModuleMetadata(ShaderModuleHandle handle, const Shad
   sm->threadgroupSize = MTL::Size(tg.width ? tg.width : 1, tg.height ? tg.height : 1, tg.depth ? tg.depth : 1);
 }
 
+void MetalContext::setIndirectBufferMetadata(BufferHandle indirectBuffer, const IndirectBufferMetadata& metadata) {
+  MetalBuffer* b = buffers_.get(indirectBuffer);
+  if (!b)
+    return;
+  b->icbPrimitiveTypes = metadata.primitiveTypes;
+  b->icbIndexBuffer = metadata.indexBuffer;
+  b->icbIndexFormat = metadata.indexFormat;
+  b->icbMeshThreadgroupSizes = metadata.meshThreadgroupSizes;
+  if (!b->icbMeshThreadgroupSizes.empty() && b->icbCapacity < b->size / 12) {
+    if (b->icb)
+      removeResident(b->icb.get());
+    if (b->icbContainer)
+      removeResident(b->icbContainer.get());
+    b->icb.reset();
+    b->icbContainer.reset();
+    createIndirectCommandBufferFor(*b, 12);
+  }
+}
+
 NS::SharedPtr<MTL::Function> MetalContext::specializeFunction(const MetalShaderModule* sm, const SpecializationConstantDesc& spec) {
   if (!sm || !sm->function)
     return {};
@@ -795,6 +1063,7 @@ Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipe
     if (objFn)
       mpd->setMaxTotalThreadsPerObjectThreadgroup(objTG.width * objTG.height * objTG.depth);
     mpd->setMaxTotalThreadsPerMeshThreadgroup(meshTG.width * meshTG.height * meshTG.depth);
+    mpd->setSupportIndirectCommandBuffers(true);
 
     NS::Error* meshError = nullptr;
     NS::SharedPtr<MTL::RenderPipelineState> meshPipeline =
@@ -849,6 +1118,7 @@ Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipe
     rpd->setStencilAttachmentPixelFormat(toMTLPixelFormat(desc.stencilFormat));
   rpd->setRasterSampleCount(desc.samplesCount ? desc.samplesCount : 1);
   rpd->setAlphaToCoverageEnabled(desc.alphaToCoverage);
+  rpd->setSupportIndirectCommandBuffers(true);
 
   NS::Error* error = nullptr;
   NS::SharedPtr<MTL::RenderPipelineState> pipeline = NS::TransferPtr(device_->newRenderPipelineState(rpd.get(), &error));
@@ -934,8 +1204,13 @@ void MetalContext::destroy(BufferHandle handle) {
   if (!buffers_.get(handle))
     return;
   deferredTask([this, handle]() {
-    if (const MetalBuffer* mb = buffers_.get(handle))
+    if (const MetalBuffer* mb = buffers_.get(handle)) {
       removeResident(mb->buffer.get());
+      if (mb->icb)
+        removeResident(mb->icb.get());
+      if (mb->icbContainer)
+        removeResident(mb->icbContainer.get());
+    }
     buffers_.destroy(handle);
   });
 }
@@ -1222,6 +1497,7 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
                                       const lvk::Framebuffer& framebuffer,
                                       const lvk::Dependencies& deps) {
   endComputeEncoder();
+  ctx_->encodeIndirectDraws(deps);
 
   NS::SharedPtr<MTL4::RenderPassDescriptor> rpd = ns::make<MTL4::RenderPassDescriptor>();
 
@@ -1581,6 +1857,57 @@ void CommandBuffer::cmdDraw(uint32_t vertexCount, uint32_t instanceCount, uint32
   resetArgumentTableIfOverridden();
 }
 
+void CommandBuffer::cmdDrawIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride) {
+  const MetalBuffer* b = ctx_->getBuffer(indirectBuffer);
+  if (!b || !b->buffer || !drawCount)
+    return;
+  applyDepthStencilState();
+  if (drawCount == 1) {
+    encoder_->drawPrimitives(topology_, b->buffer->gpuAddress() + indirectBufferOffset);
+  } else if (b->icb) {
+    const uint32_t firstCommand = uint32_t(indirectBufferOffset / (stride ? stride : 16));
+    encoder_->executeCommandsInBuffer(b->icb.get(), NS::Range(firstCommand, drawCount));
+  }
+  resetArgumentTableIfOverridden();
+}
+
+void CommandBuffer::cmdDrawIndexedIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride) {
+  const MetalBuffer* b = ctx_->getBuffer(indirectBuffer);
+  if (!b || !b->buffer || !drawCount)
+    return;
+  applyDepthStencilState();
+  if (drawCount == 1) {
+    const MetalBuffer* idx = b->icbIndexBuffer.empty() ? nullptr : ctx_->getBuffer(b->icbIndexBuffer);
+    if (!idx || !idx->buffer)
+      return;
+    const MTL::IndexType indexType = b->icbIndexFormat == IndexFormat_UI16 ? MTL::IndexTypeUInt16 : MTL::IndexTypeUInt32;
+    encoder_->drawIndexedPrimitives(
+        topology_, indexType, idx->buffer->gpuAddress(), idx->size, b->buffer->gpuAddress() + indirectBufferOffset);
+  } else if (b->icb) {
+    const uint32_t firstCommand = uint32_t(indirectBufferOffset / (stride ? stride : 20));
+    encoder_->executeCommandsInBuffer(b->icb.get(), NS::Range(firstCommand, drawCount));
+  }
+  resetArgumentTableIfOverridden();
+}
+
+void CommandBuffer::cmdDrawMeshTasksIndirect(BufferHandle indirectBuffer,
+                                             size_t indirectBufferOffset,
+                                             uint32_t drawCount,
+                                             uint32_t stride) {
+  const MetalBuffer* b = ctx_->getBuffer(indirectBuffer);
+  if (!b || !b->buffer || !drawCount)
+    return;
+  applyDepthStencilState();
+  if (drawCount == 1) {
+    encoder_->drawMeshThreadgroups(
+        b->buffer->gpuAddress() + indirectBufferOffset, meshObjectThreadsPerThreadgroup_, meshThreadsPerThreadgroup_);
+  } else if (b->icb && !b->icbMeshThreadgroupSizes.empty()) {
+    const uint32_t firstCommand = uint32_t(indirectBufferOffset / (stride ? stride : 12));
+    encoder_->executeCommandsInBuffer(b->icb.get(), NS::Range(firstCommand, drawCount));
+  }
+  resetArgumentTableIfOverridden();
+}
+
 void CommandBuffer::cmdDrawMeshTasks(const Dimensions& threadgroupCount) {
   applyDepthStencilState();
   encoder_->drawMeshThreadgroups(MTL::Size(threadgroupCount.width, threadgroupCount.height, threadgroupCount.depth),
@@ -1659,6 +1986,66 @@ void MetalValidatedCommandBuffer::cmdBeginRendering(const lvk::RenderPass& rende
         "validation: cmdBeginRendering uses %u color attachments but the GPU supports at most %u", desc.getNumColorAttachments(), maxColor);
   }
   CommandBuffer::cmdBeginRendering(renderPass, desc, deps);
+}
+
+static void validateIndirectRange(const MetalBuffer* b, size_t offset, uint32_t drawCount, uint32_t stride, const char* fn) {
+  if (!b || !b->buffer)
+    return;
+  const uint32_t s = stride ? stride : 16;
+  const uint32_t capacity = uint32_t(b->size / s);
+  const uint32_t firstCommand = uint32_t(offset / s);
+  if (firstCommand + drawCount > capacity) {
+    LLOGW("validation: %s draws commands [%u, %u) but the indirect buffer holds at most %u (size %zu / stride %u)",
+          fn,
+          firstCommand,
+          firstCommand + drawCount,
+          capacity,
+          b->size,
+          s);
+  }
+}
+
+void MetalValidatedCommandBuffer::cmdDrawIndirect(BufferHandle indirectBuffer,
+                                                  size_t indirectBufferOffset,
+                                                  uint32_t drawCount,
+                                                  uint32_t stride) {
+  validateIndirectRange(context()->getBuffer(indirectBuffer), indirectBufferOffset, drawCount, stride ? stride : 16, "cmdDrawIndirect");
+  CommandBuffer::cmdDrawIndirect(indirectBuffer, indirectBufferOffset, drawCount, stride);
+}
+
+void MetalValidatedCommandBuffer::cmdDrawIndexedIndirect(BufferHandle indirectBuffer,
+                                                         size_t indirectBufferOffset,
+                                                         uint32_t drawCount,
+                                                         uint32_t stride) {
+  validateIndirectRange(
+      context()->getBuffer(indirectBuffer), indirectBufferOffset, drawCount, stride ? stride : 20, "cmdDrawIndexedIndirect");
+  CommandBuffer::cmdDrawIndexedIndirect(indirectBuffer, indirectBufferOffset, drawCount, stride);
+}
+
+void MetalValidatedCommandBuffer::cmdDrawMeshTasksIndirect(BufferHandle indirectBuffer,
+                                                           size_t indirectBufferOffset,
+                                                           uint32_t drawCount,
+                                                           uint32_t stride) {
+  const MetalBuffer* b = context()->getBuffer(indirectBuffer);
+  validateIndirectRange(b, indirectBufferOffset, drawCount, stride ? stride : 12, "cmdDrawMeshTasksIndirect");
+  if (drawCount > 1 && b && b->icbMeshThreadgroupSizes.empty()) {
+    LLOGW(
+        "validation: cmdDrawMeshTasksIndirect with drawCount>1 needs a per-buffer threadgroup-sizes buffer - call "
+        "setIndirectBufferMetadata({.meshThreadgroupSizes=...}); the draw is a no-op");
+  }
+  CommandBuffer::cmdDrawMeshTasksIndirect(indirectBuffer, indirectBufferOffset, drawCount, stride);
+}
+
+void MetalValidatedCommandBuffer::cmdDrawIndexedIndirectCount(BufferHandle, size_t, BufferHandle, size_t, uint32_t, uint32_t) {
+  LLOGW(
+      "validation: cmdDrawIndexedIndirectCount is not supported by lvk-metal - a GPU-side draw-count buffer cannot be resolved when the "
+      "indirect command buffer is encoded at cmdBeginRendering(); use cmdDrawIndexedIndirect with a CPU drawCount instead");
+}
+
+void MetalValidatedCommandBuffer::cmdDrawMeshTasksIndirectCount(BufferHandle, size_t, BufferHandle, size_t, uint32_t, uint32_t) {
+  LLOGW(
+      "validation: cmdDrawMeshTasksIndirectCount is not supported by lvk-metal - a GPU-side draw-count buffer cannot be resolved when the "
+      "indirect command buffer is encoded at cmdBeginRendering()");
 }
 
 IMetalCommandBuffer& MetalValidatedContext::acquireMetalCommandBuffer(bool dedicatedCompute) {

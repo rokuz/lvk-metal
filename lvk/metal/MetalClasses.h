@@ -19,6 +19,14 @@ namespace lvk::metal {
 struct MetalBuffer {
   NS::SharedPtr<MTL::Buffer> buffer;
   size_t size = 0;
+  uint8_t usage = 0;
+  NS::SharedPtr<MTL::IndirectCommandBuffer> icb;
+  NS::SharedPtr<MTL::Buffer> icbContainer;
+  uint32_t icbCapacity = 0;
+  BufferHandle icbPrimitiveTypes;
+  BufferHandle icbIndexBuffer;
+  IndexFormat icbIndexFormat = IndexFormat_UI32;
+  BufferHandle icbMeshThreadgroupSizes;
 };
 
 struct MetalImage {
@@ -104,9 +112,25 @@ class CommandBuffer : public IMetalCommandBuffer {
   CommandBuffer() = default;
   explicit CommandBuffer(MetalContext* ctx) : ctx_(ctx) {}
 
+  // --- No-op for Metal ---
   void cmdTransitionToGeneral(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const override {}
   void cmdTransitionToShaderReadOnly(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const override {}
   void cmdTransitionToRenderingLocalRead(const ldr::Span<TextureHandle>& textures) const override {}
+  // --- Not supported for Metal
+  void cmdDrawIndexedIndirectCount(BufferHandle indirectBuffer,
+                                   size_t indirectBufferOffset,
+                                   BufferHandle countBuffer,
+                                   size_t countBufferOffset,
+                                   uint32_t maxDrawCount,
+                                   uint32_t stride = 0) override {}
+  void cmdDrawMeshTasksIndirectCount(BufferHandle indirectBuffer,
+                                     size_t indirectBufferOffset,
+                                     BufferHandle countBuffer,
+                                     size_t countBufferOffset,
+                                     uint32_t maxDrawCount,
+                                     uint32_t stride = 0) override {}
+  // -----------------------
+
   void cmdReleaseToAsyncCompute(const ldr::Span<TextureHandle>& textures) const override {}
 
   void cmdPushDebugGroupLabel(const char* label, uint32_t colorRGBA = 0xffffffff) const override;
@@ -147,30 +171,15 @@ class CommandBuffer : public IMetalCommandBuffer {
                       uint32_t firstIndex = 0,
                       int32_t vertexOffset = 0,
                       uint32_t baseInstance = 0) override;
-  void cmdDrawIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override {}
-  void cmdDrawIndexedIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override {}
-  void cmdDrawIndexedIndirectCount(BufferHandle indirectBuffer,
-                                   size_t indirectBufferOffset,
-                                   BufferHandle countBuffer,
-                                   size_t countBufferOffset,
-                                   uint32_t maxDrawCount,
-                                   uint32_t stride = 0) override {}
+  void cmdDrawIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override;
+  void cmdDrawIndexedIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override;
   void cmdDrawMeshTasks(const Dimensions& threadgroupCount) override;
-  void cmdDrawMeshTasksIndirect(BufferHandle indirectBuffer,
-                                size_t indirectBufferOffset,
-                                uint32_t drawCount,
-                                uint32_t stride = 0) override {}
-  void cmdDrawMeshTasksIndirectCount(BufferHandle indirectBuffer,
-                                     size_t indirectBufferOffset,
-                                     BufferHandle countBuffer,
-                                     size_t countBufferOffset,
-                                     uint32_t maxDrawCount,
-                                     uint32_t stride = 0) override {}
+  void cmdDrawMeshTasksIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override;
   void cmdTraceRays(uint32_t width, uint32_t height, uint32_t depth = 1, const Dependencies& deps = {}) override {}
 
   void cmdSetBlendColor(const float color[4]) override;
   void cmdSetDepthBias(float constantFactor, float slopeFactor, float clamp = 0.0f) override;
-  void cmdSetDepthBiasEnable(bool enable) override {}
+  void cmdSetDepthBiasEnable(bool enable) override {} // TODO: implement
 
   void cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) override {}
   void cmdWriteTimestamp(QueryPoolHandle pool, uint32_t query) override {}
@@ -230,6 +239,25 @@ class MetalContext : public IMetalContext {
 
   friend class MetalStagingDevice;
 
+  // --- No-op for Metal ---
+  void flushMappedMemory(BufferHandle handle, size_t offset, size_t size) const override {}
+
+  bool setCurrentPresentMode(PresentMode mode) override {
+    return true;
+  }
+  PresentMode getCurrentPresentMode() const override {
+    return PresentMode_FIFO;
+  }
+
+  uint32_t getFramebufferMSAABitMask() const override {
+    return 1u | 2u | 4u | 8u;
+  }
+
+  bool isExtensionEnabled(const char* ext) const override {
+    return false;
+  }
+  // -----------------------
+
   uint32_t pushConstantsSize() const {
     return pushConstantsSize_;
   }
@@ -277,6 +305,7 @@ class MetalContext : public IMetalContext {
   void stopGpuCapture() override;
 
   void setShaderModuleMetadata(ShaderModuleHandle handle, const ShaderModuleMetadata& metadata) override;
+  void setIndirectBufferMetadata(BufferHandle indirectBuffer, const IndirectBufferMetadata& metadata) override;
 
   void destroy(ComputePipelineHandle handle) override;
   void destroy(RenderPipelineHandle handle) override;
@@ -301,9 +330,8 @@ class MetalContext : public IMetalContext {
   Result download(BufferHandle handle, void* data, size_t size, size_t offset) override;
   uint8_t* getMappedPtr(BufferHandle handle) const override;
   uint64_t gpuAddress(BufferHandle handle, size_t offset = 0) const override;
-  void flushMappedMemory(BufferHandle handle, size_t offset, size_t size) const override {}
   uint32_t getMaxStorageBufferRange() const override {
-    return UINT32_MAX;
+    return UINT32_MAX; // TODO: check if we have limits
   }
 
   Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override;
@@ -315,29 +343,16 @@ class MetalContext : public IMetalContext {
   TextureHandle getCurrentSwapchainTexture() override;
   Format getSwapchainFormat() const override;
   ColorSpace getSwapchainColorSpace() const override {
-    return ColorSpace_SRGB_NONLINEAR;
+    return ColorSpace_SRGB_NONLINEAR; // TODO: support others
   }
   uint32_t getSwapchainCurrentImageIndex() const override {
-    return 0;
+    return 0; // TODO: use current inflight frame index
   }
   uint32_t getNumSwapchainImages() const override {
     return framesInFlight_;
   }
   void recreateSwapchain(int newWidth, int newHeight) override;
-  bool setCurrentPresentMode(PresentMode mode) override {
-    return true;
-  }
-  PresentMode getCurrentPresentMode() const override {
-    return PresentMode_FIFO;
-  }
 
-  uint32_t getFramebufferMSAABitMask() const override {
-    return 1u | 2u | 4u | 8u;
-  }
-
-  bool isExtensionEnabled(const char* ext) const override {
-    return false;
-  }
   bool supportsAsyncCompute() const override {
     return false;
   }
@@ -380,7 +395,11 @@ class MetalContext : public IMetalContext {
   };
   StagingAlloc writeUploadStaging(const void* data, size_t size);
 
+  void encodeIndirectDraws(const Dependencies& deps);
+
  private:
+  bool ensureIndirectEncoder();
+  void createIndirectCommandBufferFor(MetalBuffer& mb, uint32_t elementStride);
   void growUploadRing(uint32_t minRegionBytes);
   void generateMipmapImmediate(MTL::Texture* texture);
   NS::SharedPtr<MTL::DepthStencilState> makeDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
@@ -442,6 +461,15 @@ class MetalContext : public IMetalContext {
   uint32_t uploadRingFrameRegionBytes_ = 0;
   uint32_t uploadRingCursor_ = 0;
 
+  NS::SharedPtr<MTL::ComputePipelineState> icbEncodePipeline_;
+  NS::SharedPtr<MTL::ComputePipelineState> icbEncodePipelineTyped_;
+  NS::SharedPtr<MTL::ComputePipelineState> icbEncodeIndexed16_;
+  NS::SharedPtr<MTL::ComputePipelineState> icbEncodeIndexed16Typed_;
+  NS::SharedPtr<MTL::ComputePipelineState> icbEncodeIndexed32_;
+  NS::SharedPtr<MTL::ComputePipelineState> icbEncodeIndexed32Typed_;
+  NS::SharedPtr<MTL::ComputePipelineState> icbEncodeMesh_;
+  NS::SharedPtr<MTL4::ArgumentTable> icbEncodeArgTable_;
+
   struct RetiredBuffer {
     NS::SharedPtr<MTL::Buffer> buffer;
     SubmitHandle handle;
@@ -476,6 +504,21 @@ class MetalValidatedCommandBuffer final : public CommandBuffer {
 
   void cmdPushConstants(const void* data, size_t size, size_t offset = 0) override;
   void cmdBeginRendering(const lvk::RenderPass& renderPass, const lvk::Framebuffer& desc, const Dependencies& deps = {}) override;
+  void cmdDrawIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override;
+  void cmdDrawIndexedIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override;
+  void cmdDrawMeshTasksIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override;
+  void cmdDrawIndexedIndirectCount(BufferHandle indirectBuffer,
+                                   size_t indirectBufferOffset,
+                                   BufferHandle countBuffer,
+                                   size_t countBufferOffset,
+                                   uint32_t maxDrawCount,
+                                   uint32_t stride = 0) override;
+  void cmdDrawMeshTasksIndirectCount(BufferHandle indirectBuffer,
+                                     size_t indirectBufferOffset,
+                                     BufferHandle countBuffer,
+                                     size_t countBufferOffset,
+                                     uint32_t maxDrawCount,
+                                     uint32_t stride = 0) override;
 };
 
 class MetalValidatedContext final : public MetalContext {
