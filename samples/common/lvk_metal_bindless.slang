@@ -13,6 +13,7 @@ public struct lvkTextures3D         { Texture3D               data[LVK_BINDLESS_
 public struct lvkTexturesCube       { TextureCube             data[LVK_BINDLESS_TEXTURES]; };
 public struct lvkSamplers           { SamplerState            data[LVK_BINDLESS_SAMPLERS]; };
 public struct lvkImages2D           { RWTexture2D<float4>     data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkImages3D           { RWTexture3D<float4>     data[LVK_BINDLESS_TEXTURES]; };
 public struct lvkTexturesDepth2D    { Texture2D               data[LVK_BINDLESS_TEXTURES]; };
 public struct lvkSamplersComparison { SamplerComparisonState  data[LVK_BINDLESS_SAMPLERS]; };
 
@@ -21,10 +22,11 @@ public ParameterBlock<lvkBuffers> kBuffers; // 1
 public ParameterBlock<lvkTextures2D> kTextures2D; // 2
 public ParameterBlock<lvkTextures3D> kTextures3D; // 3
 public ParameterBlock<lvkTexturesCube> kTexturesCube; // 4
-public ParameterBlock<lvkSamplers> kSamplers; // 5
-public ParameterBlock<lvkImages2D> kImages2D; // 6
-public ParameterBlock<lvkTexturesDepth2D> kTexturesDepth2D; // 7
-public ParameterBlock<lvkSamplersComparison> kSamplersComparison; // 8
+public ParameterBlock<lvkTexturesDepth2D> kTexturesDepth2D; // 5
+public ParameterBlock<lvkSamplers> kSamplers; // 6
+public ParameterBlock<lvkSamplersComparison> kSamplersComparison; // 7
+public ParameterBlock<lvkImages2D> kImages2D; // 8
+public ParameterBlock<lvkImages3D> kImages3D; // 9
 
 public float4 textureBindless2D(uint t, uint s, float2 uv) {
   return kTextures2D.data[t].Sample(kSamplers.data[s], uv);

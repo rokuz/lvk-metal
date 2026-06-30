@@ -238,7 +238,7 @@ struct GrayscalePC {
 };
 
 [[clang::annotate("lvk_numthreads(16,16,1)")]]
-kernel void grayscaleMain(uint2 gid [[thread_position_in_grid]], constant GrayscalePC& pc [[buffer(0)]], LVK_BINDLESS_COMPUTE_ARGS) {
+kernel void grayscaleMain(uint2 gid [[thread_position_in_grid]], constant GrayscalePC& pc [[buffer(0)]], LVK_BINDLESS_ARGS) {
   if (gid.x < pc.width && gid.y < pc.height) {
     const float4 px = kImages2D.data[pc.tex].read(gid);
     const float l = dot(px, float4(0.299, 0.587, 0.114, 0.0));

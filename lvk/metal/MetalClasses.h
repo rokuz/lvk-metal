@@ -37,6 +37,16 @@ struct MetalImage {
   bool isSwapchainImage = false;
 };
 
+struct MetalAccelStruct {
+  NS::SharedPtr<MTL::AccelerationStructure> accel;
+  NS::SharedPtr<MTL::Buffer> scratch;
+  NS::SharedPtr<MTL::Buffer> instanceDescriptors;
+  NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> tlasDescriptor;
+  AccelStructType type = AccelStructType_Invalid;
+  uint32_t numInstances = 0;
+  uint64_t buildScratchSize = 0;
+};
+
 struct MetalSampler {
   NS::SharedPtr<MTL::SamplerState> sampler;
 };
@@ -116,6 +126,8 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdTransitionToGeneral(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const override {}
   void cmdTransitionToShaderReadOnly(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const override {}
   void cmdTransitionToRenderingLocalRead(const ldr::Span<TextureHandle>& textures) const override {}
+  void cmdBindRayTracingPipeline(lvk::RayTracingPipelineHandle handle) override {}
+
   // --- Not supported for Metal
   void cmdDrawIndexedIndirectCount(BufferHandle indirectBuffer,
                                    size_t indirectBufferOffset,
@@ -136,8 +148,6 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdPushDebugGroupLabel(const char* label, uint32_t colorRGBA = 0xffffffff) const override;
   void cmdInsertDebugEventLabel(const char* label, uint32_t colorRGBA = 0xffffffff) const override;
   void cmdPopDebugGroupLabel() const override;
-
-  void cmdBindRayTracingPipeline(lvk::RayTracingPipelineHandle handle) override {}
 
   void cmdBindComputePipeline(lvk::ComputePipelineHandle handle) override;
   void cmdDispatch(const Dimensions& groupCount, const Dependencies& deps = {}) override;
@@ -175,7 +185,12 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdDrawIndexedIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override;
   void cmdDrawMeshTasks(const Dimensions& threadgroupCount) override;
   void cmdDrawMeshTasksIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, uint32_t drawCount, uint32_t stride = 0) override;
-  void cmdTraceRays(uint32_t width, uint32_t height, uint32_t depth = 1, const Dependencies& deps = {}) override {}
+  void cmdTraceRays(uint32_t width, uint32_t height, uint32_t depth = 1, const Dependencies& deps = {}) override {
+    const uint32_t tx = uint32_t(computeThreadgroupSize_.width);
+    const uint32_t ty = uint32_t(computeThreadgroupSize_.height);
+    const uint32_t tz = uint32_t(computeThreadgroupSize_.depth);
+    cmdDispatch({(width + tx - 1) / tx, (height + ty - 1) / ty, (depth + tz - 1) / tz}, deps);
+  }
 
   void cmdSetBlendColor(const float color[4]) override;
   void cmdSetDepthBias(float constantFactor, float slopeFactor, float clamp = 0.0f) override;
@@ -193,7 +208,7 @@ class CommandBuffer : public IMetalCommandBuffer {
                     const TextureLayers& srcLayers = {},
                     const TextureLayers& dstLayers = {}) override;
   void cmdGenerateMipmap(TextureHandle handle) override;
-  void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override {}
+  void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
 
   void cmdBindArgumentTable(ArgumentTableHandle handle) override;
 
@@ -256,6 +271,11 @@ class MetalContext : public IMetalContext {
   bool isExtensionEnabled(const char* ext) const override {
     return false;
   }
+
+  Holder<RayTracingPipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc, Result* outResult = nullptr) override {
+    return {};
+  }
+  void destroy(RayTracingPipelineHandle handle) override {}
   // -----------------------
 
   uint32_t pushConstantsSize() const {
@@ -286,19 +306,12 @@ class MetalContext : public IMetalContext {
   }
   Holder<ComputePipelineHandle> createComputePipeline(const ComputePipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
-  Holder<RayTracingPipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc, Result* outResult = nullptr) override {
-    Result::setResult(outResult, Result::Code::RuntimeError, "createRayTracingPipeline not implemented");
-    return {};
-  }
   Holder<ShaderModuleHandle> createShaderModule(const ShaderModuleDesc& desc, Result* outResult = nullptr) override;
   Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult = nullptr) override {
     Result::setResult(outResult, Result::Code::RuntimeError, "createQueryPool not implemented");
     return {};
   }
-  Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult = nullptr) override {
-    Result::setResult(outResult, Result::Code::RuntimeError, "createAccelerationStructure not implemented");
-    return {};
-  }
+  Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult = nullptr) override;
   Holder<ArgumentTableHandle> createArgumentTable(const ArgumentTableDesc& desc, Result* outResult = nullptr) override;
 
   bool startGpuCapture(const char* outputPath) override;
@@ -309,22 +322,17 @@ class MetalContext : public IMetalContext {
 
   void destroy(ComputePipelineHandle handle) override;
   void destroy(RenderPipelineHandle handle) override;
-  void destroy(RayTracingPipelineHandle handle) override {}
   void destroy(ShaderModuleHandle handle) override;
   void destroy(SamplerHandle handle) override;
   void destroy(BufferHandle handle) override;
   void destroy(TextureHandle handle) override;
   void destroy(QueryPoolHandle handle) override {}
-  void destroy(AccelStructHandle handle) override {}
+  void destroy(AccelStructHandle handle) override;
   void destroy(Framebuffer& fb) override {}
   void destroy(ArgumentTableHandle handle) override;
 
-  uint64_t gpuAddress(AccelStructHandle handle) const override {
-    return 0;
-  }
-  AccelStructSizes getAccelStructSizes(const AccelStructDesc& desc, Result* outResult = nullptr) const override {
-    return {};
-  }
+  uint64_t gpuAddress(AccelStructHandle handle) const override;
+  AccelStructSizes getAccelStructSizes(const AccelStructDesc& desc, Result* outResult = nullptr) const override;
 
   Result upload(BufferHandle handle, const void* data, size_t size, size_t offset = 0) override;
   Result download(BufferHandle handle, void* data, size_t size, size_t offset) override;
@@ -383,6 +391,12 @@ class MetalContext : public IMetalContext {
   const MetalArgumentTable* getArgumentTable(ArgumentTableHandle handle) const {
     return argumentTables_.get(handle);
   }
+  const MetalAccelStruct* getAccelStruct(AccelStructHandle handle) const {
+    return accelStructs_.get(handle);
+  }
+  void buildAccelStructImmediate(MTL::AccelerationStructure* accel,
+                                 const MTL4::AccelerationStructureDescriptor* desc,
+                                 MTL::Buffer* scratch);
   ArgumentTableHandle defaultArgumentTable() const {
     return defaultArgumentTable_;
   }
@@ -411,6 +425,7 @@ class MetalContext : public IMetalContext {
   void ensureTextureCapacity(uint32_t index);
   void ensureSamplerCapacity(uint32_t index);
   void ensureBufferCapacity(uint32_t index);
+  void ensureAccelStructCapacity(uint32_t index);
   void rebindArgumentTableHeaps();
   void growConstantsRing();
   void addResident(const MTL::Allocation* allocation);
@@ -443,12 +458,15 @@ class MetalContext : public IMetalContext {
   NS::SharedPtr<MTL::Buffer> bufferHeap_;
   NS::SharedPtr<MTL::Buffer> textureHeap_;
   NS::SharedPtr<MTL::Buffer> samplerHeap_;
+  NS::SharedPtr<MTL::Buffer> accelStructHeap_;
   uint32_t buffersCapacity_ = 0;
   uint32_t texturesCapacity_ = 0;
   uint32_t samplersCapacity_ = 0;
+  uint32_t accelStructsCapacity_ = 256;
   uint32_t buffersCapacityMax_ = 0;
   uint32_t texturesCapacityMax_ = 0;
   uint32_t samplersCapacityMax_ = 0;
+  uint32_t accelStructsCapacityMax_ = 65536;
   GpuLimits limits_;
 
   NS::SharedPtr<MTL::Buffer> constantsRing_;
@@ -492,6 +510,7 @@ class MetalContext : public IMetalContext {
   ldr::Pool<lvk::RenderPipeline, MetalRenderPipeline> renderPipelines_;
   ldr::Pool<lvk::ComputePipeline, MetalComputePipeline> computePipelines_;
   ldr::Pool<lvk::metal::ArgumentTable, MetalArgumentTable> argumentTables_;
+  ldr::Pool<lvk::AccelerationStructure, MetalAccelStruct> accelStructs_;
 
   TextureHandle swapchainTextureHandle_;
   ArgumentTableHandle defaultArgumentTable_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Foundation/Foundation.hpp>
+#include <Metal/MTL4AccelerationStructure.hpp>
 #include <Metal/Metal.hpp>
 #include <QuartzCore/QuartzCore.hpp>
 

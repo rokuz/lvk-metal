@@ -157,16 +157,18 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
     return false;
 
   ArgumentTableDesc defaultDesc;
-  defaultDesc.numKinds = 9;
+  defaultDesc.numKinds = 11;
   defaultDesc.kinds[0] = ArgumentKind::Constants;
   defaultDesc.kinds[1] = ArgumentKind::Buffers;
   defaultDesc.kinds[2] = ArgumentKind::Textures2D;
   defaultDesc.kinds[3] = ArgumentKind::Textures3D;
   defaultDesc.kinds[4] = ArgumentKind::TexturesCube;
-  defaultDesc.kinds[5] = ArgumentKind::Samplers;
-  defaultDesc.kinds[6] = ArgumentKind::Images2D;
-  defaultDesc.kinds[7] = ArgumentKind::TexturesDepth2D;
-  defaultDesc.kinds[8] = ArgumentKind::SamplersComparison;
+  defaultDesc.kinds[5] = ArgumentKind::TexturesDepth2D;
+  defaultDesc.kinds[6] = ArgumentKind::Samplers;
+  defaultDesc.kinds[7] = ArgumentKind::SamplersComparison;
+  defaultDesc.kinds[8] = ArgumentKind::Images2D;
+  defaultDesc.kinds[9] = ArgumentKind::Images3D;
+  defaultDesc.kinds[10] = ArgumentKind::AccelStructs;
   defaultDesc.debugName = "lvk-metal.default-argtable";
   defaultArgumentTable_ = createArgumentTable(defaultDesc, nullptr).release();
 
@@ -214,11 +216,14 @@ bool MetalContext::createBindlessHeaps() {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(texturesCapacity_) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   samplerHeap_ =
       NS::TransferPtr(device_->newBuffer(NS::UInteger(samplersCapacity_) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
-  if (!LVK_VERIFY(bufferHeap_ && textureHeap_ && samplerHeap_))
+  accelStructHeap_ =
+      NS::TransferPtr(device_->newBuffer(NS::UInteger(accelStructsCapacity_) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
+  if (!LVK_VERIFY(bufferHeap_ && textureHeap_ && samplerHeap_ && accelStructHeap_))
     return false;
   ns::setLabel(bufferHeap_.get(), "lvk-metal.bindless.buffers");
   ns::setLabel(textureHeap_.get(), "lvk-metal.bindless.textures");
   ns::setLabel(samplerHeap_.get(), "lvk-metal.bindless.samplers");
+  ns::setLabel(accelStructHeap_.get(), "lvk-metal.bindless.accelstructs");
 
   constantsFrameRegionBytes_ = pushesPerFrameCapacity_ * pushConstantsSize_;
   constantsRing_ = NS::TransferPtr(device_->newBuffer(NS::UInteger(MetalImmediateCommands::kMaxCommandBuffers) * constantsFrameRegionBytes_,
@@ -230,6 +235,7 @@ bool MetalContext::createBindlessHeaps() {
   addResident(bufferHeap_.get());
   addResident(textureHeap_.get());
   addResident(samplerHeap_.get());
+  addResident(accelStructHeap_.get());
   addResident(constantsRing_.get());
   return true;
 }
@@ -330,12 +336,16 @@ void MetalContext::rebindArgumentTableHeaps() {
       case ArgumentKind::Textures3D:
       case ArgumentKind::TexturesCube:
       case ArgumentKind::Images2D:
+      case ArgumentKind::Images3D:
       case ArgumentKind::TexturesDepth2D:
         at.table->setAddress(textureHeap_->gpuAddress(), i);
         break;
       case ArgumentKind::Samplers:
       case ArgumentKind::SamplersComparison:
         at.table->setAddress(samplerHeap_->gpuAddress(), i);
+        break;
+      case ArgumentKind::AccelStructs:
+        at.table->setAddress(accelStructHeap_->gpuAddress(), i);
         break;
       case ArgumentKind::Constants:
         break;
@@ -407,6 +417,26 @@ void MetalContext::ensureBufferCapacity(uint32_t index) {
   bufferHeap_ = nb;
   buffersCapacity_ = newCap;
   addResident(bufferHeap_.get());
+  rebindArgumentTableHeaps();
+}
+
+void MetalContext::ensureAccelStructCapacity(uint32_t index) {
+  if (index < accelStructsCapacity_)
+    return;
+  uint32_t newCap = accelStructsCapacity_;
+  while (newCap <= index && newCap < accelStructsCapacityMax_)
+    newCap *= 2;
+  if (newCap > accelStructsCapacityMax_)
+    newCap = accelStructsCapacityMax_;
+  LVK_ASSERT_MSG(index < newCap, "acceleration structure bindless pool exhausted (max %u)", accelStructsCapacityMax_);
+  NS::SharedPtr<MTL::Buffer> nb =
+      NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
+  std::memcpy(nb->contents(), accelStructHeap_->contents(), NS::UInteger(accelStructsCapacity_) * sizeof(MTL::ResourceID));
+  ns::setLabel(nb.get(), "lvk-metal.bindless.accelstructs");
+  removeResident(accelStructHeap_.get());
+  accelStructHeap_ = nb;
+  accelStructsCapacity_ = newCap;
+  addResident(accelStructHeap_.get());
   rebindArgumentTableHeaps();
 }
 
@@ -843,27 +873,30 @@ using namespace metal;
 #ifndef LVK_BINDLESS_SAMPLERS
 #define LVK_BINDLESS_SAMPLERS 1024
 #endif
+#ifndef LVK_BINDLESS_ACCEL_STRUCTS
+#define LVK_BINDLESS_ACCEL_STRUCTS 256
+#endif
 
-struct lvkTextures2D     { array<texture2d<float>,                       LVK_BINDLESS_TEXTURES> data; };
-struct lvkTextures3D     { array<texture3d<float>,                       LVK_BINDLESS_TEXTURES> data; };
-struct lvkTexturesCube   { array<texturecube<float>,                     LVK_BINDLESS_TEXTURES> data; };
-struct lvkSamplers       { array<sampler,                                LVK_BINDLESS_SAMPLERS> data; };
-struct lvkImages2D       { array<texture2d<float, access::read_write>,    LVK_BINDLESS_TEXTURES> data; };
-struct lvkTexturesDepth2D { array<depth2d<float>,                         LVK_BINDLESS_TEXTURES> data; };
+struct lvkTextures2D         { array<texture2d<float>,                            LVK_BINDLESS_TEXTURES> data; };
+struct lvkTextures3D         { array<texture3d<float>,                            LVK_BINDLESS_TEXTURES> data; };
+struct lvkTexturesCube       { array<texturecube<float>,                          LVK_BINDLESS_TEXTURES> data; };
+struct lvkTexturesDepth2D    { array<depth2d<float>,                              LVK_BINDLESS_TEXTURES> data; };
+struct lvkSamplers           { array<sampler,                                     LVK_BINDLESS_SAMPLERS> data; };
+struct lvkSamplersComparison { array<sampler,                                     LVK_BINDLESS_SAMPLERS> data; };
+struct lvkImages2D           { array<texture2d<float, access::read_write>,        LVK_BINDLESS_TEXTURES> data; };
+struct lvkImages3D           { array<texture3d<float, access::read_write>,        LVK_BINDLESS_TEXTURES> data; };
+struct lvkAccelStructs       { array<raytracing::instance_acceleration_structure, LVK_BINDLESS_ACCEL_STRUCTS> data; };
 
 #define LVK_BINDLESS_ARGS \
-  device const lvkTextures2D&      kTextures2D      [[buffer(2)]], \
-  device const lvkTextures3D&      kTextures3D      [[buffer(3)]], \
-  device const lvkTexturesCube&    kTexturesCube    [[buffer(4)]], \
-  constant lvkSamplers&            kSamplers        [[buffer(5)]], \
-  device const lvkTexturesDepth2D& kTexturesDepth2D [[buffer(7)]]
-
-#define LVK_BINDLESS_COMPUTE_ARGS \
-  device const lvkTextures2D&   kTextures2D   [[buffer(2)]], \
-  device const lvkTextures3D&   kTextures3D   [[buffer(3)]], \
-  device const lvkTexturesCube& kTexturesCube [[buffer(4)]], \
-  constant lvkSamplers&         kSamplers     [[buffer(5)]], \
-  device const lvkImages2D&     kImages2D     [[buffer(6)]]
+  device const lvkTextures2D&         kTextures2D         [[buffer(2)]], \
+  device const lvkTextures3D&         kTextures3D         [[buffer(3)]], \
+  device const lvkTexturesCube&       kTexturesCube       [[buffer(4)]], \
+  device const lvkTexturesDepth2D&    kTexturesDepth2D    [[buffer(5)]], \
+  constant lvkSamplers&               kSamplers           [[buffer(6)]], \
+  constant lvkSamplersComparison&     kSamplersComparison [[buffer(7)]], \
+  device const lvkImages2D&           kImages2D           [[buffer(8)]], \
+  device const lvkImages3D&           kImages3D           [[buffer(9)]], \
+  device const lvkAccelStructs&       kTLAS               [[buffer(10)]]
 
 #define textureBindless2D(tid, sid, uv)            kTextures2D.data[tid].sample(kSamplers.data[sid], (uv))
 #define textureBindless2DLod(tid, sid, uv, lod)    kTextures2D.data[tid].sample(kSamplers.data[sid], (uv), level(lod))
@@ -871,9 +904,11 @@ struct lvkTexturesDepth2D { array<depth2d<float>,                         LVK_BI
 #define textureBindlessCube(tid, sid, dir)         kTexturesCube.data[tid].sample(kSamplers.data[sid], (dir))
 #define textureBindlessCubeLod(tid, sid, dir, lod) kTexturesCube.data[tid].sample(kSamplers.data[sid], (dir), level(lod))
 #define textureBindlessSize2D(tid)                 uint2(kTextures2D.data[tid].get_width(), kTextures2D.data[tid].get_height())
-#define textureBindless2DShadow(tid, sid, uvw)     kTexturesDepth2D.data[tid].sample_compare(kSamplers.data[sid], (uvw).xy, (uvw).z)
+#define textureBindless2DShadow(tid, sid, uvw)     kTexturesDepth2D.data[tid].sample_compare(kSamplersComparison.data[sid], (uvw).xy, (uvw).z)
 #define imageBindlessLoad2D(tid, pos)              kImages2D.data[tid].read(uint2(pos))
 #define imageBindlessStore2D(tid, pos, val)        kImages2D.data[tid].write((val), uint2(pos))
+#define imageBindlessLoad3D(tid, pos)              kImages3D.data[tid].read(uint3(pos))
+#define imageBindlessStore3D(tid, pos, val)        kImages3D.data[tid].write((val), uint3(pos))
 )";
 
 static MTL::Size parseThreadgroupSize(const char* src, const char* entryPoint) {
@@ -908,6 +943,7 @@ Holder<ShaderModuleHandle> MetalContext::createShaderModule(const ShaderModuleDe
     if (std::strstr(desc.data, "LVK_BINDLESS")) {
       source += "#define LVK_BINDLESS_TEXTURES " + std::to_string(texturesCapacity_) + "\n";
       source += "#define LVK_BINDLESS_SAMPLERS " + std::to_string(samplersCapacity_) + "\n";
+      source += "#define LVK_BINDLESS_ACCEL_STRUCTS " + std::to_string(accelStructsCapacity_) + "\n";
       source += kBindlessPreamble;
     }
     source += desc.data;
@@ -1165,6 +1201,7 @@ Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTabl
     case ArgumentKind::Textures3D:
     case ArgumentKind::TexturesCube:
     case ArgumentKind::Images2D:
+    case ArgumentKind::Images3D:
     case ArgumentKind::TexturesDepth2D:
       table->setAddress(textureHeap_->gpuAddress(), i);
       break;
@@ -1172,12 +1209,250 @@ Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTabl
     case ArgumentKind::SamplersComparison:
       table->setAddress(samplerHeap_->gpuAddress(), i);
       break;
+    case ArgumentKind::AccelStructs:
+      table->setAddress(accelStructHeap_->gpuAddress(), i);
+      break;
     case ArgumentKind::Constants:
       at.constantsIndex = i;
       break;
     }
   }
   return {this, argumentTables_.create(std::move(at))};
+}
+
+static MTL::AttributeFormat toMTLAttributeFormat(VertexFormat fmt) {
+  switch (fmt) {
+  case VertexFormat_Float1:
+    return MTL::AttributeFormatFloat;
+  case VertexFormat_Float2:
+    return MTL::AttributeFormatFloat2;
+  case VertexFormat_Float3:
+    return MTL::AttributeFormatFloat3;
+  case VertexFormat_Float4:
+    return MTL::AttributeFormatFloat4;
+  case VertexFormat_HalfFloat2:
+    return MTL::AttributeFormatHalf2;
+  case VertexFormat_HalfFloat3:
+    return MTL::AttributeFormatHalf3;
+  case VertexFormat_HalfFloat4:
+    return MTL::AttributeFormatHalf4;
+  default:
+    return MTL::AttributeFormatFloat3;
+  }
+}
+
+static uint32_t vertexFormatByteSize(VertexFormat fmt) {
+  switch (fmt) {
+  case VertexFormat_Float1:
+    return 4;
+  case VertexFormat_Float2:
+    return 8;
+  case VertexFormat_Float3:
+    return 12;
+  case VertexFormat_Float4:
+    return 16;
+  case VertexFormat_HalfFloat2:
+    return 4;
+  case VertexFormat_HalfFloat3:
+    return 6;
+  case VertexFormat_HalfFloat4:
+    return 8;
+  default:
+    return 12;
+  }
+}
+
+static MTL::AccelerationStructureInstanceOptions toMTLInstanceOptions(uint32_t flags) {
+  uint32_t opt = 0;
+  if (flags & AccelStructInstanceFlagBits_TriangleFacingCullDisable)
+    opt |= MTL::AccelerationStructureInstanceOptionDisableTriangleCulling;
+  if (flags & AccelStructInstanceFlagBits_TriangleFlipFacing)
+    opt |= MTL::AccelerationStructureInstanceOptionTriangleFrontFacingWindingCounterClockwise;
+  if (flags & AccelStructInstanceFlagBits_ForceOpaque)
+    opt |= MTL::AccelerationStructureInstanceOptionOpaque;
+  if (flags & AccelStructInstanceFlagBits_ForceNoOpaque)
+    opt |= MTL::AccelerationStructureInstanceOptionNonOpaque;
+  return MTL::AccelerationStructureInstanceOptions(opt);
+}
+
+static NS::SharedPtr<MTL4::PrimitiveAccelerationStructureDescriptor> makeTriangleBlasDescriptor(const AccelStructDesc& desc,
+                                                                                                MTL::GPUAddress vbAddr,
+                                                                                                MTL::GPUAddress ibAddr,
+                                                                                                MTL::GPUAddress xformAddr) {
+  NS::SharedPtr<MTL4::AccelerationStructureTriangleGeometryDescriptor> geom =
+      ns::make<MTL4::AccelerationStructureTriangleGeometryDescriptor>();
+  const uint32_t vstride = desc.vertexStride ? desc.vertexStride : vertexFormatByteSize(desc.vertexFormat);
+  const uint32_t triCount = desc.buildRange.primitiveCount;
+  geom->setVertexBuffer(MTL4::BufferRange(vbAddr, uint64_t(vstride) * desc.numVertices));
+  geom->setVertexFormat(toMTLAttributeFormat(desc.vertexFormat));
+  geom->setVertexStride(vstride);
+  if (ibAddr) {
+    const uint32_t idxSize = desc.indexFormat == IndexFormat_UI16 ? 2 : 4;
+    geom->setIndexBuffer(MTL4::BufferRange(ibAddr, uint64_t(idxSize) * triCount * 3));
+    geom->setIndexType(toMTLIndexType(desc.indexFormat));
+  }
+  geom->setTriangleCount(triCount);
+  geom->setOpaque(desc.geometryFlags & AccelStructGeometryFlagBits_Opaque);
+  if (xformAddr) {
+    geom->setTransformationMatrixBuffer(MTL4::BufferRange(xformAddr, sizeof(float) * 12));
+    geom->setTransformationMatrixLayout(MTL::MatrixLayoutRowMajor);
+  }
+  NS::SharedPtr<MTL4::PrimitiveAccelerationStructureDescriptor> prim = ns::make<MTL4::PrimitiveAccelerationStructureDescriptor>();
+  const NS::Object* geoms[] = {geom.get()};
+  prim->setGeometryDescriptors(NS::Array::array(geoms, 1));
+  return prim;
+}
+
+static NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> makeInstanceTlasDescriptor(MTL::GPUAddress instAddr,
+                                                                                               uint32_t numInstances) {
+  const uint32_t stride = sizeof(MTL::IndirectAccelerationStructureInstanceDescriptor);
+  NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> d = ns::make<MTL4::InstanceAccelerationStructureDescriptor>();
+  d->setInstanceCount(numInstances);
+  d->setInstanceDescriptorType(MTL::AccelerationStructureInstanceDescriptorTypeIndirect);
+  d->setInstanceDescriptorStride(stride);
+  d->setInstanceDescriptorBuffer(MTL4::BufferRange(instAddr, uint64_t(stride) * (numInstances ? numInstances : 1)));
+  d->setInstanceTransformationMatrixLayout(MTL::MatrixLayoutColumnMajor);
+  return d;
+}
+
+static void translateInstances(const MetalBuffer* src, MTL::Buffer* dst, uint32_t count) {
+  if (!src || !src->buffer || src->buffer->storageMode() != MTL::StorageModeShared || !dst)
+    return;
+  const AccelStructInstance* in = static_cast<const AccelStructInstance*>(src->buffer->contents());
+  MTL::IndirectAccelerationStructureInstanceDescriptor* out =
+      static_cast<MTL::IndirectAccelerationStructureInstanceDescriptor*>(dst->contents());
+  for (uint32_t i = 0; i < count; ++i) {
+    const AccelStructInstance& s = in[i];
+    MTL::IndirectAccelerationStructureInstanceDescriptor& d = out[i];
+    for (int c = 0; c < 4; ++c)
+      for (int r = 0; r < 3; ++r)
+        d.transformationMatrix.columns[c][r] = s.transform.matrix[r][c];
+    d.options = toMTLInstanceOptions(s.flags);
+    d.mask = s.mask;
+    d.intersectionFunctionTableOffset = s.instanceShaderBindingTableRecordOffset;
+    d.userID = s.instanceCustomIndex;
+    d.accelerationStructureID._impl = s.accelerationStructureReference;
+  }
+}
+
+void MetalContext::buildAccelStructImmediate(MTL::AccelerationStructure* accel,
+                                             const MTL4::AccelerationStructureDescriptor* desc,
+                                             MTL::Buffer* scratch) {
+  flushResidency();
+  const MetalImmediateCommands::CommandBufferWrapper& wrapper = immediate_->acquire();
+  MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
+  enc->buildAccelerationStructure(accel, desc, MTL4::BufferRange(scratch->gpuAddress(), scratch->length()));
+  enc->barrierAfterStages(
+      MTL::StageAccelerationStructure, MTL::StageDispatch | MTL::StageVertex | MTL::StageFragment, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
+  immediate_->wait(immediate_->submit(wrapper));
+}
+
+Holder<AccelStructHandle> MetalContext::createAccelerationStructure(const AccelStructDesc& desc, Result* outResult) {
+  MetalAccelStruct as;
+  as.type = desc.type;
+
+  NS::SharedPtr<MTL4::PrimitiveAccelerationStructureDescriptor> blasDesc;
+  NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> tlasDesc;
+  MTL4::AccelerationStructureDescriptor* asDesc = nullptr;
+
+  if (desc.type == AccelStructType_BLAS) {
+    const MetalBuffer* vb = buffers_.get(desc.vertexBuffer);
+    if (!vb || !vb->buffer) {
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "BLAS requires a vertex buffer");
+      return {};
+    }
+    const MetalBuffer* ib = buffers_.get(desc.indexBuffer);
+    const MetalBuffer* xf = buffers_.get(desc.transformBuffer);
+    blasDesc = makeTriangleBlasDescriptor(
+        desc, vb->buffer->gpuAddress(), ib && ib->buffer ? ib->buffer->gpuAddress() : 0, xf && xf->buffer ? xf->buffer->gpuAddress() : 0);
+    asDesc = blasDesc.get();
+  } else if (desc.type == AccelStructType_TLAS) {
+    as.numInstances = desc.buildRange.primitiveCount;
+    const uint64_t instBytes =
+        uint64_t(sizeof(MTL::IndirectAccelerationStructureInstanceDescriptor)) * (as.numInstances ? as.numInstances : 1);
+    as.instanceDescriptors = NS::TransferPtr(device_->newBuffer(instBytes, MTL::ResourceStorageModeShared));
+    ns::setLabel(as.instanceDescriptors.get(), "lvk-metal.tlas.instances");
+    addResident(as.instanceDescriptors.get());
+    translateInstances(buffers_.get(desc.instancesBuffer), as.instanceDescriptors.get(), as.numInstances);
+    tlasDesc = makeInstanceTlasDescriptor(as.instanceDescriptors->gpuAddress(), as.numInstances);
+    as.tlasDescriptor = tlasDesc;
+    asDesc = tlasDesc.get();
+  } else {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "unsupported acceleration structure type");
+    return {};
+  }
+
+  const MTL::AccelerationStructureSizes sizes = device_->accelerationStructureSizes(asDesc);
+  if (!sizes.accelerationStructureSize) {
+    LLOGE("accelerationStructureSizes returned 0 for '%s'", desc.debugName ? desc.debugName : "");
+    Result::setResult(outResult, Result::Code::RuntimeError, "accelerationStructureSizes failed");
+    return {};
+  }
+  as.buildScratchSize = sizes.buildScratchBufferSize;
+  as.accel = NS::TransferPtr(device_->newAccelerationStructure(sizes.accelerationStructureSize));
+  if (!as.accel) {
+    Result::setResult(outResult, Result::Code::RuntimeError, "newAccelerationStructure failed");
+    return {};
+  }
+  ns::setLabel(as.accel.get(), desc.debugName);
+  addResident(as.accel.get());
+
+  as.scratch = NS::TransferPtr(device_->newBuffer(std::max<uint64_t>(sizes.buildScratchBufferSize, 16), MTL::ResourceStorageModePrivate));
+  ns::setLabel(as.scratch.get(), "lvk-metal.accelstruct.scratch");
+  addResident(as.scratch.get());
+
+  buildAccelStructImmediate(as.accel.get(), asDesc, as.scratch.get());
+
+  const MTL::ResourceID rid = as.accel->gpuResourceID();
+  const AccelStructHandle handle = accelStructs_.create(std::move(as));
+  ensureAccelStructCapacity(handle.index());
+  static_cast<MTL::ResourceID*>(accelStructHeap_->contents())[handle.index()] = rid;
+  return {this, handle};
+}
+
+AccelStructSizes MetalContext::getAccelStructSizes(const AccelStructDesc& desc, Result* outResult) const {
+  MTL::Device* dev = device_.get();
+  MTL::AccelerationStructureSizes sizes = {};
+  if (desc.type == AccelStructType_BLAS) {
+    const MetalBuffer* vb = buffers_.get(desc.vertexBuffer);
+    if (vb && vb->buffer) {
+      const MetalBuffer* ib = buffers_.get(desc.indexBuffer);
+      const MetalBuffer* xf = buffers_.get(desc.transformBuffer);
+      NS::SharedPtr<MTL4::PrimitiveAccelerationStructureDescriptor> d = makeTriangleBlasDescriptor(
+          desc, vb->buffer->gpuAddress(), ib && ib->buffer ? ib->buffer->gpuAddress() : 0, xf && xf->buffer ? xf->buffer->gpuAddress() : 0);
+      sizes = dev->accelerationStructureSizes(d.get());
+    }
+  } else if (desc.type == AccelStructType_TLAS) {
+    NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> d = makeInstanceTlasDescriptor(0, desc.buildRange.primitiveCount);
+    sizes = dev->accelerationStructureSizes(d.get());
+  }
+  Result::setResult(outResult, Result());
+  return AccelStructSizes{
+      .accelerationStructureSize = sizes.accelerationStructureSize,
+      .updateScratchSize = sizes.refitScratchBufferSize,
+      .buildScratchSize = sizes.buildScratchBufferSize,
+  };
+}
+
+uint64_t MetalContext::gpuAddress(AccelStructHandle handle) const {
+  const MetalAccelStruct* as = accelStructs_.get(handle);
+  return as && as->accel ? as->accel->gpuResourceID()._impl : 0;
+}
+
+void MetalContext::destroy(AccelStructHandle handle) {
+  if (!accelStructs_.get(handle))
+    return;
+  deferredTask([this, handle]() {
+    if (const MetalAccelStruct* as = accelStructs_.get(handle)) {
+      removeResident(as->accel.get());
+      if (as->scratch)
+        removeResident(as->scratch.get());
+      if (as->instanceDescriptors)
+        removeResident(as->instanceDescriptors.get());
+    }
+    accelStructs_.destroy(handle);
+  });
 }
 
 void MetalContext::destroy(RenderPipelineHandle handle) {
@@ -1733,6 +2008,19 @@ void CommandBuffer::cmdGenerateMipmap(TextureHandle handle) {
   enc->endEncoding();
 }
 
+void CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) {
+  const MetalAccelStruct* as = ctx_->getAccelStruct(handle);
+  if (!as || !as->accel || as->type != AccelStructType_TLAS || !as->tlasDescriptor)
+    return;
+  translateInstances(ctx_->getBuffer(instancesBuffer), as->instanceDescriptors.get(), as->numInstances);
+  MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
+  enc->buildAccelerationStructure(
+      as->accel.get(), as->tlasDescriptor.get(), MTL4::BufferRange(as->scratch->gpuAddress(), as->scratch->length()));
+  enc->barrierAfterStages(
+      MTL::StageAccelerationStructure, MTL::StageDispatch | MTL::StageVertex | MTL::StageFragment, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
+}
+
 void CommandBuffer::setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table) {
   if (computeEncoder_) {
     computeEncoder_->setArgumentTable(table);
@@ -1758,10 +2046,13 @@ void CommandBuffer::cmdBindComputePipeline(ComputePipelineHandle handle) {
   computeThreadgroupSize_ = p->threadgroupSize;
 }
 
-void CommandBuffer::cmdDispatch(const Dimensions& groupCount, const Dependencies&) {
+void CommandBuffer::cmdDispatch(const Dimensions& groupCount, const Dependencies& deps) {
   if (!computeEncoder_)
     return;
   computeEncoder_->dispatchThreadgroups(MTL::Size(groupCount.width, groupCount.height, groupCount.depth), computeThreadgroupSize_);
+  if (!deps.storageImages.empty() || !deps.buffers.empty() || !deps.sampledImages.empty())
+    computeEncoder_->barrierAfterStages(
+        MTL::StageDispatch, MTL::StageDispatch | MTL::StageBlit | MTL::StageVertex | MTL::StageFragment, MTL4::VisibilityOptionDevice);
   endComputeEncoder();
 }
 

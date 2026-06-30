@@ -23,6 +23,10 @@ SAMPLES = [
     ("SolarSystem", "samples/SolarSystem/SolarSystem", 120),
     ("ImGuiDemo", "samples/ImGuiDemo/ImGuiDemo", 1),
     ("Bistro", "samples/Bistro/Bistro", 30),
+    ("RTX_Hello", "samples/RTX_Hello/RTX_Hello", 60),
+    ("RTX_Textures", "samples/RTX_Textures/RTX_Textures", 60),
+    ("RTX_Bistro", "samples/RTX_Bistro/RTX_Bistro", 1),
+    ("RTX_AO", "samples/RTX_AO/RTX_AO", 64),
 ]
 
 MODES = [

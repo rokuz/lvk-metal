@@ -259,7 +259,7 @@ void ImGuiRenderer::endFrame(lvk::ICommandBuffer& cmd) {
   if (drawableData.indexBufferSize_ < idxBufBytes) {
     drawableData.ib_ = ctx_.createBuffer({
         .usage = lvk::BufferUsageBits_Index,
-        .storage = lvk::StorageType_Device,
+        .storage = lvk::StorageType_HostVisible,
         .size = idxBufBytes,
         .debugName = "ImGui: ib",
     });
@@ -269,7 +269,7 @@ void ImGuiRenderer::endFrame(lvk::ICommandBuffer& cmd) {
   if (drawableData.vertexBufferSize_ < vertexBufferSize) {
     drawableData.vb_ = ctx_.createBuffer({
         .usage = lvk::BufferUsageBits_Storage,
-        .storage = lvk::StorageType_Device,
+        .storage = lvk::StorageType_HostVisible,
         .size = vertexBufferSize,
         .debugName = "ImGui: vb",
     });

@@ -48,9 +48,11 @@ enum class ArgumentKind : uint8_t {
   TexturesCube,
   Samplers,
   Images2D,
+  Images3D,
   TexturesDepth2D,
   SamplersComparison,
   Constants,
+  AccelStructs,
 };
 
 struct ArgumentTableDesc {
