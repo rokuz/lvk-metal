@@ -32,3 +32,9 @@ V2F drawVertexMain(uint vid: SV_VertexID, uint drawID: SV_InstanceID) {
 float4 drawFragmentMain(V2F input) : SV_Target {
   return input.color;
 }
+
+[shader("fragment")]
+float4 drawFragmentGray(V2F input) : SV_Target {
+  const float g = dot(input.color.rgb, float3(0.299, 0.587, 0.114));
+  return float4(g, g, g, 1.0);
+}

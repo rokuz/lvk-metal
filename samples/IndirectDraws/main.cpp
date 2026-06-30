@@ -75,6 +75,11 @@ fragment float4 drawFragmentMain(V2F in [[stage_in]]) {
   return in.color;
 }
 
+fragment float4 drawFragmentGray(V2F in [[stage_in]]) {
+  const float g = dot(in.color.rgb, float3(0.299, 0.587, 0.114));
+  return float4(g, g, g, 1.0);
+}
+
 fragment float4 meshFragmentMain(V2F in [[stage_in]]) {
   return in.color;
 }
@@ -113,6 +118,7 @@ class IndirectDraws final : public lvk::metal::ISample {
     lvk::Holder<lvk::ShaderModuleHandle> fill;
     lvk::Holder<lvk::ShaderModuleHandle> vert;
     lvk::Holder<lvk::ShaderModuleHandle> frag;
+    lvk::Holder<lvk::ShaderModuleHandle> fragGray;
     lvk::Holder<lvk::ShaderModuleHandle> meshObj;
     lvk::Holder<lvk::ShaderModuleHandle> meshMesh;
     lvk::Holder<lvk::ShaderModuleHandle> meshFrag;
@@ -125,6 +131,7 @@ class IndirectDraws final : public lvk::metal::ISample {
       fill = slang.createShaderModule(ctx, "indirect_cull", "fillCommands", lvk::Stage_Comp, "indirect_cull.comp");
       vert = slang.createShaderModule(ctx, "indirect", "drawVertexMain", lvk::Stage_Vert, "indirect.vert");
       frag = slang.createShaderModule(ctx, "indirect", "drawFragmentMain", lvk::Stage_Frag, "indirect.frag");
+      fragGray = slang.createShaderModule(ctx, "indirect", "drawFragmentGray", lvk::Stage_Frag, "indirect.fraggray");
       meshObj = slang.createShaderModule(ctx, "indirect_mesh", "meshObjectMain", lvk::Stage_Task, "indirect_mesh.task");
       meshMesh = slang.createShaderModule(ctx, "indirect_mesh", "meshMeshMain", lvk::Stage_Mesh, "indirect_mesh.mesh");
       meshFrag = slang.createShaderModule(ctx, "indirect_mesh", "meshFragmentMain", lvk::Stage_Frag, "indirect_mesh.frag");
@@ -135,6 +142,7 @@ class IndirectDraws final : public lvk::metal::ISample {
       fill = ctx.createShaderModule({kShaderMSL, "fillCommands", lvk::Stage_Comp, "indirect.comp"});
       vert = ctx.createShaderModule({kShaderMSL, "drawVertexMain", lvk::Stage_Vert, "indirect.vert"});
       frag = ctx.createShaderModule({kShaderMSL, "drawFragmentMain", lvk::Stage_Frag, "indirect.frag"});
+      fragGray = ctx.createShaderModule({kShaderMSL, "drawFragmentGray", lvk::Stage_Frag, "indirect.fraggray"});
       meshObj = ctx.createShaderModule({kShaderMSL, "meshObjectMain", lvk::Stage_Task, "indirect.task"});
       meshMesh = ctx.createShaderModule({kShaderMSL, "meshMeshMain", lvk::Stage_Mesh, "indirect.mesh"});
       meshFrag = ctx.createShaderModule({kShaderMSL, "meshFragmentMain", lvk::Stage_Frag, "indirect.meshfrag"});
@@ -146,6 +154,12 @@ class IndirectDraws final : public lvk::metal::ISample {
         .smFrag = frag,
         .color = {{.format = lvk::Format_BGRA_UN8}},
         .debugName = "indirect draw",
+    });
+    pipelineGray_ = ctx.createRenderPipeline({
+        .smVert = vert,
+        .smFrag = fragGray,
+        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .debugName = "indirect draw (grayscale)",
     });
     meshPipeline_ = ctx.createRenderPipeline({
         .smTask = meshObj,
@@ -218,14 +232,18 @@ class IndirectDraws final : public lvk::metal::ISample {
         {.buffers = {argsDraw_, primTypes_, argsIndexed_, argsMesh_}});
     cmd.cmdBindViewport({.width = float(width_), .height = float(height_)});
 
-    cmd.cmdBindRenderPipeline(pipeline_);
     const struct {
       uint32_t count;
       float rowY;
     } topRow = {.count = kCount, .rowY = 0.6f};
+    cmd.cmdBindRenderPipeline(pipeline_);
     cmd.cmdPushConstants(topRow);
-    cmd.cmdDrawIndirect(argsDraw_, 0, kCount, 16);
+    cmd.cmdDrawIndirect(argsDraw_, 0, kCount / 2, 16);
+    cmd.cmdBindRenderPipeline(pipelineGray_);
+    cmd.cmdPushConstants(topRow);
+    cmd.cmdDrawIndirect(argsDraw_, (kCount / 2) * 16, kCount / 2, 16);
 
+    cmd.cmdBindRenderPipeline(pipeline_);
     const struct {
       uint32_t count;
       float rowY;
@@ -247,6 +265,7 @@ class IndirectDraws final : public lvk::metal::ISample {
   void destroy() override {
     fillPipeline_.reset();
     pipeline_.reset();
+    pipelineGray_.reset();
     meshPipeline_.reset();
     argsDraw_.reset();
     primTypes_.reset();
@@ -262,6 +281,7 @@ class IndirectDraws final : public lvk::metal::ISample {
   lvk::metal::IMetalContext* ctx_ = nullptr;
   lvk::Holder<lvk::ComputePipelineHandle> fillPipeline_;
   lvk::Holder<lvk::RenderPipelineHandle> pipeline_;
+  lvk::Holder<lvk::RenderPipelineHandle> pipelineGray_;
   lvk::Holder<lvk::RenderPipelineHandle> meshPipeline_;
   lvk::Holder<lvk::BufferHandle> argsDraw_;
   lvk::Holder<lvk::BufferHandle> primTypes_;
