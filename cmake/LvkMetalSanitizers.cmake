@@ -1,0 +1,23 @@
+set(LVK_METAL_SANITIZER "" CACHE STRING "Enable a sanitizer (asan, tsan, ubsan, or empty)")
+set_property(CACHE LVK_METAL_SANITIZER PROPERTY STRINGS "" "asan" "tsan" "ubsan")
+
+if(LVK_METAL_SANITIZER STREQUAL "")
+  return()
+endif()
+
+if(LVK_METAL_SANITIZER STREQUAL "asan")
+  set(LVK_METAL_SANITIZER_COMPILE_FLAGS -fsanitize=address -fno-omit-frame-pointer -g)
+  set(LVK_METAL_SANITIZER_LINK_FLAGS -fsanitize=address)
+elseif(LVK_METAL_SANITIZER STREQUAL "tsan")
+  set(LVK_METAL_SANITIZER_COMPILE_FLAGS -fsanitize=thread -g)
+  set(LVK_METAL_SANITIZER_LINK_FLAGS -fsanitize=thread)
+elseif(LVK_METAL_SANITIZER STREQUAL "ubsan")
+  set(LVK_METAL_SANITIZER_COMPILE_FLAGS -fsanitize=undefined -fno-sanitize-recover=all -g)
+  set(LVK_METAL_SANITIZER_LINK_FLAGS -fsanitize=undefined)
+else()
+  message(FATAL_ERROR "Unknown LVK_METAL_SANITIZER value: '${LVK_METAL_SANITIZER}'. Use asan, tsan, ubsan, or empty.")
+endif()
+
+message(STATUS "lvk-metal sanitizer: ${LVK_METAL_SANITIZER}")
+message(STATUS "  compile flags: ${LVK_METAL_SANITIZER_COMPILE_FLAGS}")
+message(STATUS "  link flags:    ${LVK_METAL_SANITIZER_LINK_FLAGS}")

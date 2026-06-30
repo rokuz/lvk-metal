@@ -12,12 +12,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(LVK_METAL_WITH_SAMPLES "Build sample apps" ON)
 option(LVK_METAL_WITH_SAMPLES_SLANG "Use Slang (compiled to MSL at runtime) for sample shaders" OFF)
-option(LVK_METAL_WITH_ASAN "Build with AddressSanitizer" OFF)
 
-if(LVK_METAL_WITH_ASAN)
-  add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
-  add_link_options(-fsanitize=address)
-endif()
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(LvkMetalSanitizers)
+include(LvkMetalCoverage)
 
 set(LVK_METAL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(LVK_METAL_3PARTY_SRC "${LVK_METAL_ROOT}/3party/src")
@@ -45,6 +43,15 @@ endif()
 if(NOT TARGET LVKLibrary)
   message(FATAL_ERROR "lvk-metal requires the lightweightvk target 'LVKLibrary'. "
                       "When LVK_METAL_LVK_DIR points to an external tree, that project must define " "LVKLibrary before adding lvk-metal.")
+endif()
+
+if(LVK_METAL_SANITIZER_COMPILE_FLAGS)
+  add_compile_options(${LVK_METAL_SANITIZER_COMPILE_FLAGS})
+  add_link_options(${LVK_METAL_SANITIZER_LINK_FLAGS})
+endif()
+if(LVK_METAL_COVERAGE_COMPILE_FLAGS)
+  add_compile_options(${LVK_METAL_COVERAGE_COMPILE_FLAGS})
+  add_link_options(${LVK_METAL_COVERAGE_LINK_FLAGS})
 endif()
 
 add_subdirectory(lvk)

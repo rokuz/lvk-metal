@@ -11,9 +11,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: Build & screenshot tests
+  screenshot-tests:
+    name: Screenshot tests (${{ matrix.mode }})
     runs-on: [self-hosted, macOS, ARM64]
+    continue-on-error: ${{ matrix.mode == 'tsan' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { mode: normal,   flag: "",          builddir: build }
+          - { mode: asan,     flag: "--asan",     builddir: build-asan }
+          - { mode: tsan,     flag: "--tsan",     builddir: build-tsan }
+          - { mode: coverage, flag: "--coverage", builddir: build-coverage }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,27 +43,25 @@ jobs:
           echo "KK_INCLUDE=$KK/deps/vulkan-headers/include" >> "$GITHUB_ENV"
           echo "KK_LIB=$KK/lib/libvulkan.dylib" >> "$GITHUB_ENV"
 
-      - name: Configure (Slang ON, Vulkan via KosmicKrisp)
-        run: >
-          cmake -S . -B build -G Ninja
-          -DLVK_METAL_WITH_SAMPLES_SLANG=ON
-          -DVulkan_INCLUDE_DIR="$KK_INCLUDE"
-          -DVulkan_LIBRARY="$KK_LIB"
-
-      - name: Build
-        run: cmake --build build
-
       - name: Deploy sample content
         working-directory: 3party/src/lightweightvk
         run: python3 deploy_content.py
 
-      - name: Screenshot tests
-        run: python3 tests/screenshot_test.py
+      - name: Build + screenshot tests
+        run: python3 tests/run_screenshot_tests.py ${{ matrix.flag }}
 
       - name: Upload screenshot deltas on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshot-deltas
-          path: build/_out/*.png
+          name: screenshot-deltas-${{ matrix.mode }}
+          path: ${{ matrix.builddir }}/_out/*.png
           if-no-files-found: ignore
+
+      - name: Upload coverage to Codecov
+        if: always() && matrix.mode == 'coverage'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ${{ matrix.builddir }}/coverage.lcov
+          disable_search: true
