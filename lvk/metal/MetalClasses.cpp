@@ -99,10 +99,10 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   width_ = width;
   height_ = height;
   vsync_ = cfg.vsync;
-  swapchainFormat_ = cfg.swapchainFormat;
+  swapchainFormat_ = toMTLPixelFormat(cfg.swapchainFormat);
   texturesCapacity_ = cfg.initialTexturesPoolSize ? cfg.initialTexturesPoolSize : 1;
   samplersCapacity_ = cfg.initialSamplesPoolSize ? cfg.initialSamplesPoolSize : 1;
-  buffersCapacity_ = texturesCapacity_;
+  buffersCapacity_ = cfg.initialBuffersPoolSize ? cfg.initialBuffersPoolSize : 1;
   pushConstantsSize_ = cfg.pushConstantsSize;
   pushesPerFrameCapacity_ = cfg.initialPushConstantsPerFrameCount ? cfg.initialPushConstantsPerFrameCount : 1;
 

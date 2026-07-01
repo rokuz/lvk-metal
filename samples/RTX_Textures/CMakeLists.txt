@@ -11,3 +11,4 @@ target_compile_definitions(RTX_Textures PRIVATE "LVK_METAL_SAMPLE_CONTENT_DIR=\"
 target_link_libraries(RTX_Textures PRIVATE lvk-metal LVKLibrary glfw)
 
 lvk_metal_target_add_common(RTX_Textures)
+lvk_metal_target_use_slang(RTX_Textures "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -11,6 +12,10 @@
 #include <lvk/LVK-Metal.h>
 
 #include "app_common.h"
+
+#ifdef LVK_METAL_SAMPLE_USE_SLANG
+#include "slang_runtime.h"
+#endif
 
 using glm::mat4;
 using glm::vec3;
@@ -150,7 +155,18 @@ class RTXHello final : public lvk::metal::ISample {
 
     sampler_ = ctx.createSampler({.debugName = "sampler"});
 
-    lvk::Holder<lvk::ShaderModuleHandle> trace = ctx.createShaderModule({kTraceMSL, "traceRays", lvk::Stage_Comp, "rtx.trace"});
+    lvk::Holder<lvk::ShaderModuleHandle> trace;
+#ifdef LVK_METAL_SAMPLE_USE_SLANG
+    const char* useSlang = getenv("LVK_METAL_USE_SLANG");
+    if (useSlang && useSlang[0] && useSlang[0] != '0') {
+      LLOGL("[lvk-metal] shaders: Slang -> MSL");
+      SlangRuntime slang(LVK_METAL_SAMPLE_SHADERS_DIR);
+      trace = slang.createShaderModule(ctx, "rtx_hello", "traceRays", lvk::Stage_Comp, "rtx.trace");
+    } else
+#endif
+    {
+      trace = ctx.createShaderModule({kTraceMSL, "traceRays", lvk::Stage_Comp, "rtx.trace"});
+    }
     pipeline_ = ctx.createComputePipeline({.smComp = trace});
 
     lvk::Holder<lvk::ShaderModuleHandle> presentVert =

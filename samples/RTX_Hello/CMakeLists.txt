@@ -9,3 +9,4 @@ target_include_directories(RTX_Hello PRIVATE "${LVK_DEPS}/glm" "${LVK_DEPS}/ldru
 target_link_libraries(RTX_Hello PRIVATE lvk-metal LVKLibrary glfw)
 
 lvk_metal_target_add_common(RTX_Hello)
+lvk_metal_target_use_slang(RTX_Hello "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -19,6 +19,10 @@
 #include "app_common.h"
 #include "bistro_mesh.h"
 
+#ifdef LVK_METAL_SAMPLE_USE_SLANG
+#include "slang_runtime.h"
+#endif
+
 using glm::mat4;
 using glm::vec2;
 using glm::vec3;
@@ -523,7 +527,18 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
     });
     sampler_ = ctx.createSampler({.debugName = "sampler"});
 
-    lvk::Holder<lvk::ShaderModuleHandle> trace = ctx.createShaderModule({kTraceMSL, "traceRays", lvk::Stage_Comp, "ao.trace"});
+    lvk::Holder<lvk::ShaderModuleHandle> trace;
+#ifdef LVK_METAL_SAMPLE_USE_SLANG
+    const char* useSlang = getenv("LVK_METAL_USE_SLANG");
+    if (useSlang && useSlang[0] && useSlang[0] != '0') {
+      LLOGL("[lvk-metal] shaders: Slang -> MSL");
+      SlangRuntime slang(LVK_METAL_SAMPLE_SHADERS_DIR);
+      trace = slang.createShaderModule(ctx, "rtx_ao", "traceRays", lvk::Stage_Comp, "ao.trace");
+    } else
+#endif
+    {
+      trace = ctx.createShaderModule({kTraceMSL, "traceRays", lvk::Stage_Comp, "ao.trace"});
+    }
     pipeline_ = ctx.createComputePipeline({.smComp = trace});
 
     lvk::Holder<lvk::ShaderModuleHandle> presentVert =

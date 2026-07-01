@@ -16,3 +16,4 @@ target_compile_definitions(RTX_Bistro PRIVATE "LVK_METAL_SAMPLE_CONTENT_DIR=\"${
 target_link_libraries(RTX_Bistro PRIVATE lvk-metal LVKLibrary glfw meshoptimizer)
 
 lvk_metal_target_add_common(RTX_Bistro)
+lvk_metal_target_use_slang(RTX_Bistro "${CMAKE_CURRENT_SOURCE_DIR}")

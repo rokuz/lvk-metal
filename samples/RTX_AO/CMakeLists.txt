@@ -16,3 +16,4 @@ target_compile_definitions(RTX_AO PRIVATE "LVK_METAL_SAMPLE_CONTENT_DIR=\"${LVK_
 target_link_libraries(RTX_AO PRIVATE lvk-metal lvk-metal-imgui LVKLibrary glfw meshoptimizer)
 
 lvk_metal_target_add_common(RTX_AO)
+lvk_metal_target_use_slang(RTX_AO "${CMAKE_CURRENT_SOURCE_DIR}")

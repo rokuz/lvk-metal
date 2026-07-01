@@ -6,16 +6,23 @@ module lvk_metal_bindless;
 #ifndef LVK_BINDLESS_SAMPLERS
 #define LVK_BINDLESS_SAMPLERS 1024
 #endif
+#ifndef LVK_BINDLESS_ACCEL_STRUCTS
+#define LVK_BINDLESS_ACCEL_STRUCTS 256
+#endif
+#ifndef LVK_BINDLESS_BUFFERS
+#define LVK_BINDLESS_BUFFERS 16384
+#endif
 
-public struct lvkBuffers            { uint64_t                data[1]; };
-public struct lvkTextures2D         { Texture2D               data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkTextures3D         { Texture3D               data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkTexturesCube       { TextureCube             data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkSamplers           { SamplerState            data[LVK_BINDLESS_SAMPLERS]; };
-public struct lvkImages2D           { RWTexture2D<float4>     data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkImages3D           { RWTexture3D<float4>     data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkTexturesDepth2D    { Texture2D               data[LVK_BINDLESS_TEXTURES]; };
-public struct lvkSamplersComparison { SamplerComparisonState  data[LVK_BINDLESS_SAMPLERS]; };
+public struct lvkBuffers            { public uint64_t                        data[LVK_BINDLESS_BUFFERS]; };
+public struct lvkTextures2D         { public Texture2D                       data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkTextures3D         { public Texture3D                       data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkTexturesCube       { public TextureCube                     data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkSamplers           { public SamplerState                    data[LVK_BINDLESS_SAMPLERS]; };
+public struct lvkImages2D           { public RWTexture2D<float4>             data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkImages3D           { public RWTexture3D<float4>             data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkTexturesDepth2D    { public Texture2D                       data[LVK_BINDLESS_TEXTURES]; };
+public struct lvkSamplersComparison { public SamplerComparisonState          data[LVK_BINDLESS_SAMPLERS]; };
+public struct lvkAccelStructs       { public RaytracingAccelerationStructure data[LVK_BINDLESS_ACCEL_STRUCTS]; };
 
 // Slang assigns indices by order. Push constants have index 0.
 public ParameterBlock<lvkBuffers> kBuffers; // 1
@@ -27,6 +34,7 @@ public ParameterBlock<lvkSamplers> kSamplers; // 6
 public ParameterBlock<lvkSamplersComparison> kSamplersComparison; // 7
 public ParameterBlock<lvkImages2D> kImages2D; // 8
 public ParameterBlock<lvkImages3D> kImages3D; // 9
+public ParameterBlock<lvkAccelStructs> kTLAS; // 10
 
 public float4 textureBindless2D(uint t, uint s, float2 uv) {
   return kTextures2D.data[t].Sample(kSamplers.data[s], uv);

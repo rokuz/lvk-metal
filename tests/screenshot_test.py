@@ -29,6 +29,9 @@ SAMPLES = [
     ("RTX_AO", "samples/RTX_AO/RTX_AO", 64),
 ]
 
+# Crash in Metal validation layer, check in new version of Xcode/Metal tooling.
+SHADER_VALIDATION_SKIP = {"IndirectDraws"}
+
 MODES = [
     ("msl", {}),
     ("slang", {"LVK_METAL_USE_SLANG": "1"}),
@@ -161,7 +164,7 @@ def slang_enabled(build_dir):
     return False
 
 
-def run_sample(build_dir, rel_path, frame, out_png, validation, env_extra):
+def run_sample(build_dir, rel_path, frame, out_png, validation, shader_validation, env_extra):
     binary = os.path.join(build_dir, rel_path)
     if not os.path.exists(binary):
         raise FileNotFoundError(f"binary not found: {binary} (build it first)")
@@ -170,6 +173,8 @@ def run_sample(build_dir, rel_path, frame, out_png, validation, env_extra):
     if validation:
         env["MTL_DEBUG_LAYER"] = "1"
         env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
+        if shader_validation:
+            env["MTL_SHADER_VALIDATION"] = "1"
     cmd = [binary, "--headless", "--screenshot-file", out_png, "--screenshot-frame", str(frame),
            "--width", str(WIDTH), "--height", str(HEIGHT)]
     subprocess.run(cmd, env=env, check=True, timeout=120, capture_output=True)
@@ -207,7 +212,8 @@ def main():
             label = f"{name} ({mode})"
             out_png = os.path.join(out_dir, f"{name}.{mode}.png")
             try:
-                run_sample(args.build_dir, rel_path, frame, out_png, not args.no_validation, env_extra)
+                run_sample(args.build_dir, rel_path, frame, out_png, not args.no_validation,
+                           name not in SHADER_VALIDATION_SKIP, env_extra)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, RuntimeError) as e:
                 print(f"[FAIL] {label}: {e}")
                 failures += 1

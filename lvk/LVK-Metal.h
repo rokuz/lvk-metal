@@ -22,23 +22,26 @@ void destroy(lvk::IContext* ctx, lvk::metal::ArgumentTableHandle handle);
 #include <lvk/LVK.h>
 // clang-format on
 
-#include <Foundation/Foundation.hpp>
-#include <Metal/Metal.hpp>
-#include <QuartzCore/QuartzCore.hpp>
+namespace CA {
+class MetalLayer;
+} // namespace CA
 
 namespace lvk::metal {
 
 struct ContextConfig {
   uint32_t framesInFlight = 2;
-  MTL::PixelFormat swapchainFormat = MTL::PixelFormatBGRA8Unorm;
+  Format swapchainFormat = Format_BGRA_UN8;
+
+  uint32_t initialTexturesPoolSize = 16384;
+  uint32_t initialBuffersPoolSize = 32;
+  uint32_t initialSamplesPoolSize = 32;
+  uint32_t initialPushConstantsPerFrameCount = 256;
+  uint32_t pushConstantsSize = 128;
+
   bool vsync = false;
   bool gammaCorrection = false;
   bool headless = false;
   bool validation = false;
-  uint32_t initialTexturesPoolSize = 16384;
-  uint32_t initialSamplesPoolSize = 1024;
-  uint32_t initialPushConstantsPerFrameCount = 256;
-  uint32_t pushConstantsSize = 128;
 };
 
 enum class ArgumentKind : uint8_t {
