@@ -13,10 +13,12 @@ class IContext;
 
 namespace lvk::metal {
 using ArgumentTableHandle = ldr::Handle<struct ArgumentTable>;
+using TilePipelineHandle = ldr::Handle<struct TilePipeline>;
 } // namespace lvk::metal
 
 namespace lvk {
 void destroy(lvk::IContext* ctx, lvk::metal::ArgumentTableHandle handle);
+void destroy(lvk::IContext* ctx, lvk::metal::TilePipelineHandle handle);
 } // namespace lvk
 
 #include <lvk/LVK.h>
@@ -79,10 +81,28 @@ struct IndirectBufferMetadata {
   BufferHandle meshThreadgroupSizes = {};
 };
 
+struct TileRenderPipelineDesc {
+  ShaderModuleHandle smTile; // the [[kernel]] tile function
+  Format color[LVK_MAX_COLOR_ATTACHMENTS] = {}; // attachment formats, must match the enclosing render pass
+  uint32_t maxThreadsPerThreadgroup = 1024;
+  const char* debugName = "";
+
+  uint32_t getNumColorAttachments() const {
+    uint32_t n = 0;
+    while (n < LVK_MAX_COLOR_ATTACHMENTS && color[n] != Format_Invalid) {
+      n++;
+    }
+    return n;
+  }
+};
+
 class IMetalCommandBuffer : public lvk::ICommandBuffer {
  public:
   virtual void cmdBindArgumentTable(ArgumentTableHandle handle) = 0;
   virtual void cmdSetStencilRef(uint32_t ref) = 0;
+
+  virtual void cmdBindTilePipeline(TilePipelineHandle pipeline) = 0;
+  virtual void cmdDispatchTile() = 0;
 };
 
 class IMetalContext : public lvk::IContext {
@@ -97,6 +117,10 @@ class IMetalContext : public lvk::IContext {
 
   [[nodiscard]] virtual Holder<ArgumentTableHandle> createArgumentTable(const ArgumentTableDesc& desc, Result* outResult = nullptr) = 0;
   virtual void destroy(ArgumentTableHandle handle) = 0;
+
+  [[nodiscard]] virtual Holder<TilePipelineHandle> createTileRenderPipeline(const TileRenderPipelineDesc& desc,
+                                                                            Result* outResult = nullptr) = 0;
+  virtual void destroy(TilePipelineHandle handle) = 0;
 
   virtual bool startGpuCapture(const char* outputPath) = 0;
   virtual void stopGpuCapture() = 0;

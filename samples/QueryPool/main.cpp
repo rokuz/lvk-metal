@@ -76,7 +76,7 @@ class QueryPool final : public lvk::metal::ISample {
     if (frame_ > 0) {
       uint64_t ts[2] = {0, 0};
       if (ctx_->getQueryPoolResults(queryPool_, 0, 2, sizeof(ts), ts, sizeof(ts[0])) && ts[1] >= ts[0])
-        LLOGL("QueryPool: GPU pass time = %.4f ms (ticks %llu -> %llu)", double(ts[1] - ts[0]) * toMs_, ts[0], ts[1]);
+        LLOGL("QueryPool: GPU pass time = %.4f ms (ticks %llu -> %llu)\n", double(ts[1] - ts[0]) * toMs_, ts[0], ts[1]);
     }
 
     cmd.cmdResetQueryPool(queryPool_, 0, 2);

@@ -37,12 +37,19 @@ SlangRuntime::SlangRuntime(std::filesystem::path moduleDir) noexcept {
   searchPaths.push_back(LVK_METAL_SAMPLE_COMMON_DIR);
 #endif
 
+  const slang::PreprocessorMacroDesc macros[] = {
+      {"LVK_INPUT_ATTACHMENT_FIRST_INDEX", "1"}, // Vulkan uses 0-based input attachment indices, but Metal uses 1-based indices because 0
+                                                 // is reserved for the default color attachment.
+  };
+
   slang::SessionDesc sd = {};
   sd.structureSize = sizeof(slang::SessionDesc);
   sd.targets = &target;
   sd.targetCount = 1;
   sd.searchPaths = searchPaths.data();
   sd.searchPathCount = SlangInt(searchPaths.size());
+  sd.preprocessorMacros = macros;
+  sd.preprocessorMacroCount = SlangInt(sizeof(macros) / sizeof(macros[0]));
 
   if (SLANG_FAILED(impl->globalSession->createSession(sd, impl->session.writeRef())) || !impl->session) {
     LLOGE("Slang: failed to create session");

@@ -77,6 +77,10 @@ struct MetalRenderPipeline {
   MTL::Size meshThreadsPerThreadgroup = MTL::Size(1, 1, 1);
 };
 
+struct MetalTilePipeline {
+  NS::SharedPtr<MTL::RenderPipelineState> pipeline;
+};
+
 struct MetalComputePipeline {
   NS::SharedPtr<MTL::ComputePipelineState> pipeline;
   MTL::Size threadgroupSize = MTL::Size(16, 16, 1);
@@ -129,11 +133,12 @@ class CommandBuffer : public IMetalCommandBuffer {
   CommandBuffer() = default;
   explicit CommandBuffer(MetalContext* ctx) : ctx_(ctx) {}
 
-  // --- No-op for Metal ---
+  // --- No-op for Metal 4 or for LVK-Metal
   void cmdTransitionToGeneral(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const override {}
   void cmdTransitionToShaderReadOnly(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const override {}
   void cmdTransitionToRenderingLocalRead(const ldr::Span<TextureHandle>& textures) const override {}
   void cmdBindRayTracingPipeline(lvk::RayTracingPipelineHandle handle) override {}
+  void cmdNextSubpass() override {}
 
   // --- Not supported for Metal
   void cmdDrawIndexedIndirectCount(BufferHandle indirectBuffer,
@@ -148,7 +153,7 @@ class CommandBuffer : public IMetalCommandBuffer {
                                      size_t countBufferOffset,
                                      uint32_t maxDrawCount,
                                      uint32_t stride = 0) override {}
-  // -----------------------
+  // ---------------------------------------
 
   void cmdReleaseToAsyncCompute(const ldr::Span<TextureHandle>& textures) const override {}
 
@@ -162,7 +167,6 @@ class CommandBuffer : public IMetalCommandBuffer {
 
   void cmdBeginRendering(const lvk::RenderPass& renderPass, const lvk::Framebuffer& desc, const Dependencies& deps = {}) override;
   void cmdEndRendering() override;
-  void cmdNextSubpass() override {}
 
   void cmdBindViewport(const Viewport& viewport) override;
   void cmdBindScissorRect(const ScissorRect& rect) override;
@@ -218,6 +222,8 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
 
   void cmdBindArgumentTable(ArgumentTableHandle handle) override;
+  void cmdBindTilePipeline(TilePipelineHandle pipeline) override;
+  void cmdDispatchTile() override;
 
  protected:
   MetalContext* context() const {
@@ -310,6 +316,7 @@ class MetalContext : public IMetalContext {
                                           Result* outResult = nullptr) override;
   Holder<ComputePipelineHandle> createComputePipeline(const ComputePipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
+  Holder<TilePipelineHandle> createTileRenderPipeline(const TileRenderPipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<ShaderModuleHandle> createShaderModule(const ShaderModuleDesc& desc, Result* outResult = nullptr) override;
   Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult = nullptr) override;
   Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult = nullptr) override;
@@ -331,6 +338,7 @@ class MetalContext : public IMetalContext {
   void destroy(AccelStructHandle handle) override;
   void destroy(Framebuffer& fb) override {}
   void destroy(ArgumentTableHandle handle) override;
+  void destroy(TilePipelineHandle handle) override;
 
   uint64_t gpuAddress(AccelStructHandle handle) const override;
   AccelStructSizes getAccelStructSizes(const AccelStructDesc& desc, Result* outResult = nullptr) const override;
@@ -395,6 +403,9 @@ class MetalContext : public IMetalContext {
   }
   const MetalArgumentTable* getArgumentTable(ArgumentTableHandle handle) const {
     return argumentTables_.get(handle);
+  }
+  const MetalTilePipeline* getTilePipeline(TilePipelineHandle handle) const {
+    return tilePipelines_.get(handle);
   }
   const MetalAccelStruct* getAccelStruct(AccelStructHandle handle) const {
     return accelStructs_.get(handle);
@@ -518,6 +529,7 @@ class MetalContext : public IMetalContext {
   ldr::Pool<lvk::RenderPipeline, MetalRenderPipeline> renderPipelines_;
   ldr::Pool<lvk::ComputePipeline, MetalComputePipeline> computePipelines_;
   ldr::Pool<lvk::metal::ArgumentTable, MetalArgumentTable> argumentTables_;
+  ldr::Pool<lvk::metal::TilePipeline, MetalTilePipeline> tilePipelines_;
   ldr::Pool<lvk::AccelerationStructure, MetalAccelStruct> accelStructs_;
   ldr::Pool<lvk::QueryPool, MetalQueryPool> queryPools_;
 

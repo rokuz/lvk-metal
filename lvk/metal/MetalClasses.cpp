@@ -926,7 +926,8 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
     Result::setResult(outResult, Result::Code::RuntimeError, "newTexture failed");
   }
   ns::setLabel(texture.get(), debugName ? debugName : desc.debugName);
-  addResident(texture.get());
+  if (texture->storageMode() != MTL::StorageModeMemoryless)
+    addResident(texture.get());
 
   if (desc.data) {
     const uint32_t depth = desc.type == TextureType_3D ? desc.dimensions.depth : 1;
@@ -1395,6 +1396,39 @@ Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipe
   return {this, renderPipelines_.create(std::move(mp))};
 }
 
+Holder<TilePipelineHandle> MetalContext::createTileRenderPipeline(const TileRenderPipelineDesc& desc, Result* outResult) {
+  const MetalShaderModule* tile = shaderModules_.get(desc.smTile);
+  if (!tile || !tile->function) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "missing tile shader");
+    return {};
+  }
+
+  NS::SharedPtr<MTL::TileRenderPipelineDescriptor> tpd = ns::make<MTL::TileRenderPipelineDescriptor>();
+  ns::setLabel(tpd.get(), desc.debugName);
+  tpd->setTileFunction(tile->function.get());
+  tpd->setThreadgroupSizeMatchesTileSize(false);
+  tpd->setMaxTotalThreadsPerThreadgroup(desc.maxThreadsPerThreadgroup);
+
+  const uint32_t nColor = desc.getNumColorAttachments();
+  for (uint32_t i = 0; i < nColor; ++i) {
+    MTL::TileRenderPipelineColorAttachmentDescriptor* att = tpd->colorAttachments()->object(i);
+    att->setPixelFormat(toMTLPixelFormat(desc.color[i]));
+  }
+
+  NS::Error* error = nullptr;
+  NS::SharedPtr<MTL::RenderPipelineState> pipeline =
+      NS::TransferPtr(device_->newRenderPipelineState(tpd.get(), MTL::PipelineOptionNone, nullptr, &error));
+  if (!pipeline) {
+    LLOGE("createTileRenderPipeline failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    Result::setResult(outResult, Result::Code::RuntimeError, "newRenderPipelineState (tile) failed");
+    return {};
+  }
+
+  MetalTilePipeline tp;
+  tp.pipeline = std::move(pipeline);
+  return {this, tilePipelines_.create(std::move(tp))};
+}
+
 Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTableDesc& desc, Result* outResult) {
   NS::SharedPtr<MTL4::ArgumentTableDescriptor> td = ns::make<MTL4::ArgumentTableDescriptor>();
   ns::setLabel(td.get(), desc.debugName);
@@ -1717,7 +1751,8 @@ void MetalContext::destroy(TextureHandle handle) {
     return;
   deferredTask([this, handle]() {
     if (const MetalImage* img = textures_.get(handle)) {
-      removeResident(img->texture.get());
+      if (img->texture->storageMode() != MTL::StorageModeMemoryless)
+        removeResident(img->texture.get());
       if (img->yuvChroma)
         removeResident(img->yuvChroma.get());
     }
@@ -1728,6 +1763,12 @@ void MetalContext::destroy(ArgumentTableHandle handle) {
   if (!argumentTables_.get(handle))
     return;
   deferredTask([this, handle]() { argumentTables_.destroy(handle); });
+}
+
+void MetalContext::destroy(TilePipelineHandle handle) {
+  if (!tilePipelines_.get(handle))
+    return;
+  deferredTask([this, handle]() { tilePipelines_.destroy(handle); });
 }
 
 bool MetalContext::startGpuCapture(const char* outputPath) {
@@ -2349,6 +2390,18 @@ void CommandBuffer::cmdBindArgumentTable(ArgumentTableHandle handle) {
   argTableOverridden_ = true;
 }
 
+void CommandBuffer::cmdBindTilePipeline(TilePipelineHandle handle) {
+  LVK_ASSERT_MSG(isRendering_, "cmdBindTilePipeline() must be recorded inside cmdBeginRendering()/cmdEndRendering()");
+  const MetalTilePipeline* p = ctx_->getTilePipeline(handle);
+  LVK_ASSERT(p && p->pipeline);
+  encoder_->setRenderPipelineState(p->pipeline.get());
+}
+
+void CommandBuffer::cmdDispatchTile() {
+  LVK_ASSERT_MSG(isRendering_, "cmdDispatchTile() must be recorded inside cmdBeginRendering()/cmdEndRendering()");
+  encoder_->dispatchThreadsPerTile(MTL::Size(encoder_->tileWidth(), encoder_->tileHeight(), 1));
+}
+
 void CommandBuffer::cmdBindViewport(const Viewport& viewport) {
   MTL::Viewport vp;
   vp.originX = viewport.x;
@@ -2645,6 +2698,11 @@ Holder<RenderPipelineHandle> MetalValidatedContext::createRenderPipeline(const R
 namespace lvk {
 
 void destroy(lvk::IContext* ctx, lvk::metal::ArgumentTableHandle handle) {
+  if (ctx)
+    static_cast<lvk::metal::IMetalContext*>(ctx)->destroy(handle);
+}
+
+void destroy(lvk::IContext* ctx, lvk::metal::TilePipelineHandle handle) {
   if (ctx)
     static_cast<lvk::metal::IMetalContext*>(ctx)->destroy(handle);
 }
