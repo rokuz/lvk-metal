@@ -45,7 +45,14 @@ jobs:
 
       - name: Deploy sample content
         working-directory: 3party/src/lightweightvk
-        run: python3 deploy_content.py
+        run: |
+          python3 deploy_content.py
+          command -v git-lfs >/dev/null || brew install git-lfs
+          KTX=third-party/deps/src/ktx-software
+          if [ -d "$KTX/.git" ]; then
+            git -C "$KTX" lfs install --local
+            git -C "$KTX" lfs pull --include "tests/srcimages/Iron_Bars/*"
+          fi
 
       - name: Build + screenshot tests
         run: python3 tests/run_screenshot_tests.py ${{ matrix.flag }}

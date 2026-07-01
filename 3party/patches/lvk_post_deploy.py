@@ -4,6 +4,7 @@
 
 import os
 import sys
+import shutil
 import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +29,21 @@ TARGETS_LINE = "set(SPIRV_TOOLS_TARGETS ${SPIRV_TOOLS}-static ${SPIRV_TOOLS}-sha
 def deploy_lvk_dependencies():
     print("lvk_post_deploy: deploying lightweightvk dependencies")
     subprocess.run([sys.executable, "deploy_deps.py"], cwd=LVK_DIR, check=True)
+
+
+def fetch_ktx_lfs_images():
+    ktx = os.path.join(LVK_DIR, "third-party", "deps", "src", "ktx-software")
+    if not os.path.isdir(os.path.join(ktx, ".git")):
+        print("lvk_post_deploy: ktx-software not found, skipping LFS pull:", ktx)
+        return
+    if shutil.which("git-lfs") is None:
+        print("lvk_post_deploy: git-lfs not installed; LocalRead/LocalReadTile textures "
+              "(ktx-software/tests/srcimages/Iron_Bars) stay as LFS pointer stubs. "
+              "Install git-lfs and re-run deploy_deps.")
+        return
+    subprocess.run(["git", "-C", ktx, "lfs", "install", "--local"], check=True)
+    subprocess.run(["git", "-C", ktx, "lfs", "pull", "--include", "tests/srcimages/Iron_Bars/*"], check=True)
+    print("lvk_post_deploy: pulled ktx-software Iron_Bars LFS textures for LocalRead/LocalReadTile")
 
 
 def patch_spirv_tools_for_xcode():
@@ -59,6 +75,7 @@ def patch_spirv_tools_for_xcode():
 
 def main():
     deploy_lvk_dependencies()
+    fetch_ktx_lfs_images()
     patch_spirv_tools_for_xcode()
     return 0
 
