@@ -51,9 +51,22 @@ bool writeScreenshotPNG(lvk::IContext& ctx, lvk::TextureHandle texture, uint32_t
     return false;
   }
 
-  for (size_t i = 0; i < size_t(width) * size_t(height); ++i) {
-    std::swap(pixels[i * 4 + 0], pixels[i * 4 + 2]);
-    pixels[i * 4 + 3] = 255;
+  const size_t numPixels = size_t(width) * size_t(height);
+  if (ctx.getFormat(texture) == lvk::Format_A2B10G10R10_UN) {
+    // HDR10 drawable: each pixel is one packed 32-bit RGB10A2 word (10/10/10/2). Unpack to 8-bit RGBA.
+    for (size_t i = 0; i < numPixels; ++i) {
+      uint32_t v = 0;
+      std::memcpy(&v, &pixels[i * 4], 4);
+      pixels[i * 4 + 0] = uint8_t((v & 0x3FF) >> 2);
+      pixels[i * 4 + 1] = uint8_t(((v >> 10) & 0x3FF) >> 2);
+      pixels[i * 4 + 2] = uint8_t(((v >> 20) & 0x3FF) >> 2);
+      pixels[i * 4 + 3] = 255;
+    }
+  } else {
+    for (size_t i = 0; i < numPixels; ++i) {
+      std::swap(pixels[i * 4 + 0], pixels[i * 4 + 2]);
+      pixels[i * 4 + 3] = 255;
+    }
   }
 
   if (!stbi_write_png(path, int(width), int(height), 4, pixels.data(), int(width) * 4)) {
@@ -96,8 +109,11 @@ int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& samp
   float scaleX, scaleY;
   glfwGetWindowContentScale(window, &scaleX, &scaleY);
 
-  std::unique_ptr<lvk::metal::IMetalContext> ctx = lvk::metal::createContextWithMetalLayer(
-      layer, uint32_t(fbWidth), uint32_t(fbHeight), {.vsync = false, .headless = app.headless, .validation = true});
+  lvk::metal::ContextConfig ctxConfig = {.vsync = false, .headless = app.headless, .validation = true};
+  sample->configureContext(ctxConfig);
+
+  std::unique_ptr<lvk::metal::IMetalContext> ctx =
+      lvk::metal::createContextWithMetalLayer(layer, uint32_t(fbWidth), uint32_t(fbHeight), ctxConfig);
   if (!ctx) {
     LLOGE("createContextWithMetalLayer failed");
     glfwDestroyWindow(window);

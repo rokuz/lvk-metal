@@ -37,6 +37,7 @@ class ImGuiRenderer {
   lvk::Holder<lvk::ShaderModuleHandle> frag_;
   lvk::Holder<lvk::RenderPipelineHandle> pipeline_;
   lvk::Format pipelineColorFormat_ = lvk::Format_Invalid;
+  lvk::Format pipelineDepthFormat_ = lvk::Format_Invalid;
   lvk::Holder<lvk::SamplerHandle> samplerClamp_;
   std::vector<lvk::Holder<lvk::TextureHandle>> textures_;
 

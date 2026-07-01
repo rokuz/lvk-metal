@@ -31,6 +31,7 @@ namespace lvk::metal {
 struct ContextConfig {
   uint32_t framesInFlight = 2;
   Format swapchainFormat = Format_BGRA_UN8;
+  ColorSpace swapchainRequestedColorSpace = ColorSpace_SRGB_NONLINEAR;
 
   uint32_t initialTexturesPoolSize = 16384;
   uint32_t initialBuffersPoolSize = 32;
@@ -56,6 +57,7 @@ enum class ArgumentKind : uint8_t {
   SamplersComparison,
   Constants,
   AccelStructs,
+  TexturesYUVChroma,
 };
 
 struct ArgumentTableDesc {
@@ -67,6 +69,7 @@ struct ArgumentTableDesc {
 
 struct ShaderModuleMetadata {
   Dimensions threadgroupSize = {1, 1, 1};
+  uint32_t viewCount = 1; // vertex-shader multiview: max vertex amplification count
 };
 
 struct IndirectBufferMetadata {

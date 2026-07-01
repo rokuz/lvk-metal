@@ -9,7 +9,7 @@ target_compile_definitions(lvk-metal PRIVATE "$<TARGET_PROPERTY:LVKLibrary,INTER
 
 if(APPLE)
   target_link_libraries(lvk-metal PUBLIC "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework Cocoa"
-                                         "-framework MetalKit")
+                                         "-framework MetalKit" "-framework CoreGraphics")
 endif()
 
 add_library(lvk-metal-imgui STATIC "${LVK_METAL_ROOT}/lvk/HelpersImGuiMetal.cpp")

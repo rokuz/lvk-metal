@@ -23,6 +23,7 @@ public struct lvkImages3D           { public RWTexture3D<float4>             dat
 public struct lvkTexturesDepth2D    { public Texture2D                       data[LVK_BINDLESS_TEXTURES]; };
 public struct lvkSamplersComparison { public SamplerComparisonState          data[LVK_BINDLESS_SAMPLERS]; };
 public struct lvkAccelStructs       { public RaytracingAccelerationStructure data[LVK_BINDLESS_ACCEL_STRUCTS]; };
+public struct lvkYUVChroma          { public Texture2D                       data[LVK_BINDLESS_TEXTURES]; };
 
 // Slang assigns indices by order. Push constants have index 0.
 public ParameterBlock<lvkBuffers> kBuffers; // 1
@@ -35,6 +36,7 @@ public ParameterBlock<lvkSamplersComparison> kSamplersComparison; // 7
 public ParameterBlock<lvkImages2D> kImages2D; // 8
 public ParameterBlock<lvkImages3D> kImages3D; // 9
 public ParameterBlock<lvkAccelStructs> kTLAS; // 10
+public ParameterBlock<lvkYUVChroma> kYUVChroma; // 11
 
 public float4 textureBindless2D(uint t, uint s, float2 uv) {
   return kTextures2D.data[t].Sample(kSamplers.data[s], uv);
@@ -59,6 +61,15 @@ public uint2 textureBindlessSize2D(uint t) {
 }
 public float textureBindless2DShadow(uint t, uint s, float3 uvw) {
   return kTexturesDepth2D.data[t].SampleCmp(kSamplersComparison.data[s], uvw.xy, uvw.z);
+}
+public float4 textureBindlessYUV(uint t, uint s, float2 uv) {
+  const float y = kTextures2D.data[t].Sample(kSamplers.data[s], uv).r;
+  const float2 cbcr = kYUVChroma.data[t].Sample(kSamplers.data[s], uv).rg;
+  const float Y  = (y - 16.0 / 255.0) * (255.0 / 219.0);
+  const float Cb = (cbcr.x - 128.0 / 255.0) * (255.0 / 224.0);
+  const float Cr = (cbcr.y - 128.0 / 255.0) * (255.0 / 224.0);
+  const float3 rgb = float3(Y + 1.5748 * Cr, Y - 0.1873 * Cb - 0.4681 * Cr, Y + 1.8556 * Cb);
+  return float4(saturate(rgb), 1.0);
 }
 
 public float2x2 operator*(float2x2 a, float2x2 b) { return mul(b, a); }

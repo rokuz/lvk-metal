@@ -318,6 +318,36 @@ inline MTL::IndexType toMTLIndexType(IndexFormat format) {
   return format == IndexFormat_UI16 ? MTL::IndexTypeUInt16 : MTL::IndexTypeUInt32;
 }
 
+inline bool isYUVFormat(Format format) {
+  return format == Format_YUV_NV12 || format == Format_YUV_420p;
+}
+
+inline MTL::TextureSwizzle toMTLSwizzle(Swizzle s, MTL::TextureSwizzle identity) {
+  switch (s) {
+  case Swizzle_0:
+    return MTL::TextureSwizzleZero;
+  case Swizzle_1:
+    return MTL::TextureSwizzleOne;
+  case Swizzle_R:
+    return MTL::TextureSwizzleRed;
+  case Swizzle_G:
+    return MTL::TextureSwizzleGreen;
+  case Swizzle_B:
+    return MTL::TextureSwizzleBlue;
+  case Swizzle_A:
+    return MTL::TextureSwizzleAlpha;
+  default:
+    return identity;
+  }
+}
+
+inline MTL::TextureSwizzleChannels toMTLSwizzleChannels(const ComponentMapping& c) {
+  return MTL::TextureSwizzleChannels::Make(toMTLSwizzle(c.r, MTL::TextureSwizzleRed),
+                                           toMTLSwizzle(c.g, MTL::TextureSwizzleGreen),
+                                           toMTLSwizzle(c.b, MTL::TextureSwizzleBlue),
+                                           toMTLSwizzle(c.a, MTL::TextureSwizzleAlpha));
+}
+
 inline Format toLVKFormat(MTL::PixelFormat format) {
   switch (format) {
   case MTL::PixelFormatR8Unorm:

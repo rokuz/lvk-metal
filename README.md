@@ -60,6 +60,11 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | **MeshShaderFireworks** — GPU-billboarded particle fireworks via a mesh shader, additive blending | <img src="tests/references/MeshShaderFireworks.png" width="320"> |
 | **RenderToCubeMap** — render a scene into a cubemap, then sample it | <img src="tests/references/RenderToCubeMap.png" width="320"> |
 | **RenderToCubeMapSinglePass** — the same in one layered pass | <img src="tests/references/RenderToCubeMapSinglePass.png" width="320"> |
+| **TextureView** — one 2D-array texture viewed per layer via `createTextureView`; the last column is a swizzled view (R↔B) of the red layer | <img src="tests/references/TextureView.png" width="320"> |
+| **QueryPool** — wraps a pass in GPU timestamps (`cmdWriteTimestamp` / `getQueryPoolResults`) and logs the measured GPU time | <img src="tests/references/QueryPool.png" width="320"> |
+| **YUV** — samples `YUV_NV12` and `YUV_420p` textures (BT.709 decode in-shader); needs lvk's `deploy_content.py` (igl-samples), so it is not part of the automated screenshot suite | <img src="tests/references/YUV.png" width="320"> |
+| **SwapchainHDR** — renders into an HDR10 (PQ, `RGB10A2`) swapchain; the screenshot capture unpacks the packed 10-bit drawable to 8-bit RGB | <img src="tests/references/SwapchainHDR.png" width="320"> |
+| **OmniShadows** — omnidirectional point-light shadows: the scene is rendered into a cube shadow map in **one multiview pass** (vertex amplification), then lit with 9-tap PCF; an ImGui panel shows the 6 cube faces via `createTextureView` | <img src="tests/references/OmniShadows.png" width="320"> |
 | **ImGuiDemo** — Dear ImGui integration | <img src="tests/references/ImGuiDemo.png" width="320"> |
 | **SolarSystem** — textured planets, asteroid belt and HDR skybox | <img src="tests/references/SolarSystem.png" width="320"> |
 | **Bistro** — large exterior scene: shadow map, IBL skybox, bindless materials, MSAA and a compute post-process | <img src="tests/references/Bistro.png" width="320"> |
@@ -96,16 +101,16 @@ Built by default (`LVK_METAL_WITH_SAMPLES=ON`) into `build/samples/<Name>/<Name>
 | Buffer copy / fill / update | ✅ Implemented | `cmdCopyBuffer` / `cmdFillBuffer` / `cmdUpdateBuffer` via the MTL4 compute (blit) encoder; `cmdUpdateBuffer` stages through a per-frame ring (Metal 4 has no inline `vkCmdUpdateBuffer`). `cmdFillBuffer` fills the low byte of `data` (Metal fills a byte). See the `TransferOps` sample |
 | Image copy / clear / mipmap generation | ✅ Implemented | `cmdCopyImage` (`copyFromTexture`), `cmdGenerateMipmap` (`generateMipmaps`), and `generateMipmaps` in `createTexture`; `cmdClearColorImage` via a clear-only render pass (needs an attachment-capable texture). Mipmaps exercised by `SolarSystem`/`Bistro`, copy/clear by `TransferOps` |
 | Ray tracing — acceleration structures, TLAS/BLAS, inline RayQuery | ✅ Implemented | BLAS/TLAS via `createAccelerationStructure` (MTL4 primitive/instance descriptors, built on a compute encoder); the TLAS is bindless (`ArgumentKind::AccelStructs`, indexed like a texture). Metal has no ray-tracing *pipeline* (no SBT / `DispatchRays` / raygen-miss-hit groups), so RT is expressed as **inline `metal::raytracing::intersector`** inside a compute or fragment shader; `cmdTraceRays` aliases `cmdDispatch`. See the `RTX_*` samples |
-| Texture views | ⬜ Not implemented | `newTextureView` |
-| Query pools / timestamps | ⬜ Not implemented | Metal counter sampling |
-| YUV textures | ⬜ Not implemented | Metal biplanar YUV formats |
+| Texture views | ✅ Implemented | `createTextureView` → `MTL::Texture::newTextureView` (type / mip-level range / slice range / component swizzle); the view takes its own bindless slot sharing the parent's storage. Textures are created with `MTLTextureUsagePixelFormatView`. See the `TextureView` sample |
+| Query pools / timestamps | ✅ Implemented | GPU timestamps via an MTL4 `CounterHeap` (`CounterHeapTypeTimestamp`); `cmdWriteTimestamp` → `writeTimestampIntoHeap` (or the encoder's `writeTimestamp` inside a pass), `getQueryPoolResults` resolves the heap CPU-side, `getTimestampPeriodToMs` = `1000 / queryTimestampFrequency()`. See the `QueryPool` sample |
+| YUV textures | ✅ Implemented | `Format_YUV_NV12` / `Format_YUV_420p` become a two-plane Metal texture (Y = `R8Unorm`, chroma = `RG8Unorm` half-res, 420p's Cb/Cr interleaved on upload); the chroma plane lives in a parallel bindless heap indexed by the same handle, and `textureBindlessYUV` does BT.709 limited-range YCbCr→RGB in-shader. See the `YUV` sample |
 | Async-compute queue | ⬜ Not implemented | Single queue today; Metal allows several |
-| HDR / EDR swapchain | ⬜ Not implemented | Only sRGB gamma is wired; EDR not exposed |
+| HDR / EDR swapchain | ✅ Implemented | `ContextConfig::swapchainRequestedColorSpace` maps to the `CAMetalLayer` pixel format + `CGColorSpace` + `wantsExtendedDynamicRangeContent`: HDR10→`RGB10A2Unorm`/PQ, extended-linear→`RGBA16Float`/extended-linear-sRGB, BT.709; `getSwapchainColorSpace` reports it. See the `SwapchainHDR` sample |
+| Multiview (`viewMask`, `layerCount`) | ✅ Implemented | Layered single-pass rendering via Metal **vertex amplification**: a non-zero `RenderPass::viewMask` drives `setVertexAmplificationCount` + view mappings + `renderTargetArrayLength`, and the vertex shader selects the view with `[[amplification_id]]` (MSL) / `SV_ViewID` (Slang). Per-pipeline amplification capacity comes from the Metal-only `ShaderModuleMetadata::viewCount`. Used for the cube shadow map in the `OmniShadows` sample. Stereo/VR output is out of scope |
 | Render-pass subpasses (`cmdNextSubpass`, input attachments) | ⬜ Not implemented | Metal favors single-pass tile memory / programmable blending |
 | Tessellation pipeline | ⛔ Unsupported | By design (won't be added) — use mesh shaders instead |
-| SPIR-V shader ingestion | ⛔ Unsupported | Deliberate — author in MSL or Slang |
+| SPIR-V shader ingestion | ⛔ Unsupported |  By design (won't be added) — author in MSL or Slang |
 | Binding vertex buffers / vertex input | ⛔ Unsupported | By design (won't be added) — bindless vertex pulling via GPU address |
-| Multiview (`viewMask`, `layerCount`) | ⛔ Unsupported | By design (won't be added); Metal could express it via vertex amplification |
 | Geometry shaders | ⛔ Unsupported | Metal has no geometry stage — use mesh shaders |
 | Minimum sample shading | ⛔ Unsupported | No Metal API; per-sample execution is shader-driven (`[[sample_id]]`) |
 

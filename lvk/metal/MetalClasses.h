@@ -31,6 +31,7 @@ struct MetalBuffer {
 
 struct MetalImage {
   NS::SharedPtr<MTL::Texture> texture;
+  NS::SharedPtr<MTL::Texture> yuvChroma;
   MTL::PixelFormat format = MTL::PixelFormatInvalid;
   uint32_t width = 0;
   uint32_t height = 0;
@@ -51,10 +52,16 @@ struct MetalSampler {
   NS::SharedPtr<MTL::SamplerState> sampler;
 };
 
+struct MetalQueryPool {
+  NS::SharedPtr<MTL4::CounterHeap> heap;
+  uint32_t count = 0;
+};
+
 struct MetalShaderModule {
   NS::SharedPtr<MTL::Library> library;
   NS::SharedPtr<MTL::Function> function;
   MTL::Size threadgroupSize = MTL::Size(16, 16, 1);
+  uint32_t viewCount = 1;
 };
 
 struct MetalRenderPipeline {
@@ -196,8 +203,8 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdSetDepthBias(float constantFactor, float slopeFactor, float clamp = 0.0f) override;
   void cmdSetDepthBiasEnable(bool enable) override {} // TODO: implement
 
-  void cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) override {}
-  void cmdWriteTimestamp(QueryPoolHandle pool, uint32_t query) override {}
+  void cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) override;
+  void cmdWriteTimestamp(QueryPoolHandle pool, uint32_t query) override;
 
   void cmdClearColorImage(TextureHandle tex, const ClearColorValue& value, const TextureLayers& layers = {}) override;
   void cmdCopyImage(TextureHandle src,
@@ -300,17 +307,11 @@ class MetalContext : public IMetalContext {
   Holder<TextureHandle> createTextureView(TextureHandle texture,
                                           const TextureViewDesc& desc,
                                           const char* debugName = nullptr,
-                                          Result* outResult = nullptr) override {
-    Result::setResult(outResult, Result::Code::RuntimeError, "createTextureView not implemented");
-    return {};
-  }
+                                          Result* outResult = nullptr) override;
   Holder<ComputePipelineHandle> createComputePipeline(const ComputePipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<ShaderModuleHandle> createShaderModule(const ShaderModuleDesc& desc, Result* outResult = nullptr) override;
-  Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult = nullptr) override {
-    Result::setResult(outResult, Result::Code::RuntimeError, "createQueryPool not implemented");
-    return {};
-  }
+  Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult = nullptr) override;
   Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult = nullptr) override;
   Holder<ArgumentTableHandle> createArgumentTable(const ArgumentTableDesc& desc, Result* outResult = nullptr) override;
 
@@ -326,7 +327,7 @@ class MetalContext : public IMetalContext {
   void destroy(SamplerHandle handle) override;
   void destroy(BufferHandle handle) override;
   void destroy(TextureHandle handle) override;
-  void destroy(QueryPoolHandle handle) override {}
+  void destroy(QueryPoolHandle handle) override;
   void destroy(AccelStructHandle handle) override;
   void destroy(Framebuffer& fb) override {}
   void destroy(ArgumentTableHandle handle) override;
@@ -351,7 +352,7 @@ class MetalContext : public IMetalContext {
   TextureHandle getCurrentSwapchainTexture() override;
   Format getSwapchainFormat() const override;
   ColorSpace getSwapchainColorSpace() const override {
-    return ColorSpace_SRGB_NONLINEAR; // TODO: support others
+    return swapchainColorSpace_;
   }
   uint32_t getSwapchainCurrentImageIndex() const override {
     return 0; // TODO: use current inflight frame index
@@ -366,11 +367,15 @@ class MetalContext : public IMetalContext {
   }
 
   double getTimestampPeriodToMs() const override {
-    return 0.0;
+    const uint64_t freq = timestampFrequency_;
+    return freq ? 1000.0 / double(freq) : 0.0;
   }
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
-      const override {
-    return false;
+      const override;
+
+  MTL4::CounterHeap* getQueryHeap(QueryPoolHandle handle) const {
+    const MetalQueryPool* qp = queryPools_.get(handle);
+    return qp ? qp->heap.get() : nullptr;
   }
 
   MTL4::CommandBuffer* commandBuffer() const {
@@ -451,12 +456,14 @@ class MetalContext : public IMetalContext {
   uint32_t framesInFlight_ = 0;
 
   MTL::PixelFormat swapchainFormat_ = MTL::PixelFormatBGRA8Unorm;
+  ColorSpace swapchainColorSpace_ = ColorSpace_SRGB_NONLINEAR;
   uint32_t width_ = 0;
   uint32_t height_ = 0;
   bool vsync_ = false;
 
   NS::SharedPtr<MTL::Buffer> bufferHeap_;
   NS::SharedPtr<MTL::Buffer> textureHeap_;
+  NS::SharedPtr<MTL::Buffer> yuvChromaHeap_;
   NS::SharedPtr<MTL::Buffer> samplerHeap_;
   NS::SharedPtr<MTL::Buffer> accelStructHeap_;
   uint32_t buffersCapacity_ = 0;
@@ -467,6 +474,7 @@ class MetalContext : public IMetalContext {
   uint32_t texturesCapacityMax_ = 0;
   uint32_t samplersCapacityMax_ = 0;
   uint32_t accelStructsCapacityMax_ = 65536;
+  uint64_t timestampFrequency_ = 0;
   GpuLimits limits_;
 
   NS::SharedPtr<MTL::Buffer> constantsRing_;
@@ -511,6 +519,7 @@ class MetalContext : public IMetalContext {
   ldr::Pool<lvk::ComputePipeline, MetalComputePipeline> computePipelines_;
   ldr::Pool<lvk::metal::ArgumentTable, MetalArgumentTable> argumentTables_;
   ldr::Pool<lvk::AccelerationStructure, MetalAccelStruct> accelStructs_;
+  ldr::Pool<lvk::QueryPool, MetalQueryPool> queryPools_;
 
   TextureHandle swapchainTextureHandle_;
   ArgumentTableHandle defaultArgumentTable_;

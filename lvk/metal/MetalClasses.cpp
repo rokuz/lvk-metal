@@ -12,9 +12,33 @@
 #include <cstring>
 #include <dispatch/dispatch.h>
 
+#include <CoreGraphics/CoreGraphics.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
+
 namespace lvk::metal {
 
 namespace {
+
+struct SwapchainColorSpaceInfo {
+  MTL::PixelFormat format;
+  CFStringRef cgColorSpaceName;
+  bool wantsEDR;
+};
+
+SwapchainColorSpaceInfo swapchainColorSpaceInfo(ColorSpace colorSpace, MTL::PixelFormat sdrFormat) {
+  switch (colorSpace) {
+  case ColorSpace_SRGB_EXTENDED_LINEAR:
+    return {MTL::PixelFormatRGBA16Float, kCGColorSpaceExtendedLinearSRGB, true};
+  case ColorSpace_HDR10:
+    return {MTL::PixelFormatRGB10A2Unorm, kCGColorSpaceITUR_2100_PQ, true};
+  case ColorSpace_BT709_LINEAR:
+    return {sdrFormat, kCGColorSpaceITUR_709, false};
+  case ColorSpace_SRGB_NONLINEAR:
+  default:
+    return {sdrFormat, kCGColorSpaceSRGB, false};
+  }
+}
 
 MTL::LoadAction toLoadAction(lvk::LoadOp op) {
   switch (op) {
@@ -100,6 +124,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   height_ = height;
   vsync_ = cfg.vsync;
   swapchainFormat_ = toMTLPixelFormat(cfg.swapchainFormat);
+  swapchainColorSpace_ = cfg.swapchainRequestedColorSpace;
   texturesCapacity_ = cfg.initialTexturesPoolSize ? cfg.initialTexturesPoolSize : 1;
   samplersCapacity_ = cfg.initialSamplesPoolSize ? cfg.initialSamplesPoolSize : 1;
   buffersCapacity_ = cfg.initialBuffersPoolSize ? cfg.initialBuffersPoolSize : 1;
@@ -110,6 +135,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
     return false;
 
   limits_ = limitsForFamily(detectGpuFamily(device_.get()));
+  timestampFrequency_ = device_->queryTimestampFrequency();
   const GpuLimits& limits = limits_;
   texturesCapacityMax_ = limits.maxTexturesInArgumentBuffer;
   buffersCapacityMax_ = limits.maxBuffersInArgumentBuffer;
@@ -129,10 +155,22 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
       swapchainFormat_ = srgb;
   }
 
+  const SwapchainColorSpaceInfo colorSpaceInfo = swapchainColorSpaceInfo(swapchainColorSpace_, swapchainFormat_);
+  swapchainFormat_ = colorSpaceInfo.format;
+
   metalLayer_ = layer;
   metalLayer_->retain();
   metalLayer_->setDevice(device_.get());
   metalLayer_->setPixelFormat(swapchainFormat_);
+  if (swapchainColorSpace_ != ColorSpace_SRGB_NONLINEAR) {
+    if (CGColorSpaceRef cs = CGColorSpaceCreateWithName(colorSpaceInfo.cgColorSpaceName)) {
+      metalLayer_->setColorspace(cs);
+      CGColorSpaceRelease(cs);
+    }
+    using SetBoolMsg = void (*)(void*, SEL, BOOL);
+    reinterpret_cast<SetBoolMsg>(objc_msgSend)(
+        metalLayer_, sel_registerName("setWantsExtendedDynamicRangeContent:"), colorSpaceInfo.wantsEDR ? YES : NO);
+  }
   metalLayer_->setFramebufferOnly(!cfg.headless);
   metalLayer_->setDrawableSize(CGSizeMake(width_, height_));
   metalLayer_->setDisplaySyncEnabled(vsync_);
@@ -157,7 +195,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
     return false;
 
   ArgumentTableDesc defaultDesc;
-  defaultDesc.numKinds = 11;
+  defaultDesc.numKinds = 12;
   defaultDesc.kinds[0] = ArgumentKind::Constants;
   defaultDesc.kinds[1] = ArgumentKind::Buffers;
   defaultDesc.kinds[2] = ArgumentKind::Textures2D;
@@ -169,6 +207,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   defaultDesc.kinds[8] = ArgumentKind::Images2D;
   defaultDesc.kinds[9] = ArgumentKind::Images3D;
   defaultDesc.kinds[10] = ArgumentKind::AccelStructs;
+  defaultDesc.kinds[11] = ArgumentKind::TexturesYUVChroma;
   defaultDesc.debugName = "lvk-metal.default-argtable";
   defaultArgumentTable_ = createArgumentTable(defaultDesc, nullptr).release();
 
@@ -214,14 +253,17 @@ bool MetalContext::createBindlessHeaps() {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(buffersCapacity_) * sizeof(MTL::GPUAddress), MTL::ResourceStorageModeShared));
   textureHeap_ =
       NS::TransferPtr(device_->newBuffer(NS::UInteger(texturesCapacity_) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
+  yuvChromaHeap_ =
+      NS::TransferPtr(device_->newBuffer(NS::UInteger(texturesCapacity_) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   samplerHeap_ =
       NS::TransferPtr(device_->newBuffer(NS::UInteger(samplersCapacity_) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   accelStructHeap_ =
       NS::TransferPtr(device_->newBuffer(NS::UInteger(accelStructsCapacity_) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
-  if (!LVK_VERIFY(bufferHeap_ && textureHeap_ && samplerHeap_ && accelStructHeap_))
+  if (!LVK_VERIFY(bufferHeap_ && textureHeap_ && yuvChromaHeap_ && samplerHeap_ && accelStructHeap_))
     return false;
   ns::setLabel(bufferHeap_.get(), "lvk-metal.bindless.buffers");
   ns::setLabel(textureHeap_.get(), "lvk-metal.bindless.textures");
+  ns::setLabel(yuvChromaHeap_.get(), "lvk-metal.bindless.yuvchroma");
   ns::setLabel(samplerHeap_.get(), "lvk-metal.bindless.samplers");
   ns::setLabel(accelStructHeap_.get(), "lvk-metal.bindless.accelstructs");
 
@@ -234,6 +276,7 @@ bool MetalContext::createBindlessHeaps() {
 
   addResident(bufferHeap_.get());
   addResident(textureHeap_.get());
+  addResident(yuvChromaHeap_.get());
   addResident(samplerHeap_.get());
   addResident(accelStructHeap_.get());
   addResident(constantsRing_.get());
@@ -340,6 +383,9 @@ void MetalContext::rebindArgumentTableHeaps() {
       case ArgumentKind::TexturesDepth2D:
         at.table->setAddress(textureHeap_->gpuAddress(), i);
         break;
+      case ArgumentKind::TexturesYUVChroma:
+        at.table->setAddress(yuvChromaHeap_->gpuAddress(), i);
+        break;
       case ArgumentKind::Samplers:
       case ArgumentKind::SamplersComparison:
         at.table->setAddress(samplerHeap_->gpuAddress(), i);
@@ -367,10 +413,17 @@ void MetalContext::ensureTextureCapacity(uint32_t index) {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), textureHeap_->contents(), NS::UInteger(texturesCapacity_) * sizeof(MTL::ResourceID));
   ns::setLabel(nb.get(), "lvk-metal.bindless.textures");
+  NS::SharedPtr<MTL::Buffer> nbChroma =
+      NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
+  std::memcpy(nbChroma->contents(), yuvChromaHeap_->contents(), NS::UInteger(texturesCapacity_) * sizeof(MTL::ResourceID));
+  ns::setLabel(nbChroma.get(), "lvk-metal.bindless.yuvchroma");
   removeResident(textureHeap_.get());
+  removeResident(yuvChromaHeap_.get());
   textureHeap_ = nb;
+  yuvChromaHeap_ = nbChroma;
   texturesCapacity_ = newCap;
   addResident(textureHeap_.get());
+  addResident(yuvChromaHeap_.get());
   rebindArgumentTableHeaps();
 }
 
@@ -795,6 +848,66 @@ Holder<BufferHandle> MetalContext::createBuffer(const BufferDesc& desc, const ch
 }
 
 Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const char* debugName, Result* outResult) {
+  if (isYUVFormat(desc.format)) {
+    const uint32_t w = desc.dimensions.width;
+    const uint32_t h = desc.dimensions.height;
+    const uint32_t cw = w / 2;
+    const uint32_t ch = h / 2;
+
+    const auto makePlane = [&](MTL::PixelFormat fmt, uint32_t pw, uint32_t p8h) {
+      NS::SharedPtr<MTL::TextureDescriptor> td = ns::make<MTL::TextureDescriptor>();
+      td->setTextureType(MTL::TextureType2D);
+      td->setPixelFormat(fmt);
+      td->setWidth(pw);
+      td->setHeight(p8h);
+      td->setUsage(MTL::TextureUsageShaderRead);
+      td->setStorageMode(toMTLStorageMode(desc.storage));
+      return NS::TransferPtr(device_->newTexture(td.get()));
+    };
+
+    NS::SharedPtr<MTL::Texture> yTex = makePlane(MTL::PixelFormatR8Unorm, w, h);
+    NS::SharedPtr<MTL::Texture> cTex = makePlane(MTL::PixelFormatRG8Unorm, cw, ch);
+    if (!yTex || !cTex) {
+      Result::setResult(outResult, Result::Code::RuntimeError, "newTexture failed (YUV)");
+      return {};
+    }
+    ns::setLabel(yTex.get(), debugName ? debugName : desc.debugName);
+    ns::setLabel(cTex.get(), debugName ? debugName : desc.debugName);
+    addResident(yTex.get());
+    addResident(cTex.get());
+
+    if (desc.data) {
+      const uint8_t* src = static_cast<const uint8_t*>(desc.data);
+      staging_->uploadTexture(yTex.get(), 0, 0, 0, w, h, 1, 0, 0, src, 0);
+      if (desc.format == Format_YUV_NV12) {
+        staging_->uploadTexture(cTex.get(), 0, 0, 0, cw, ch, 1, 0, 0, src + size_t(w) * h, 0);
+      } else {
+        const uint8_t* cb = src + size_t(w) * h;
+        const uint8_t* cr = cb + size_t(cw) * ch;
+        std::vector<uint8_t> interleaved(size_t(cw) * ch * 2);
+        for (size_t i = 0; i < size_t(cw) * ch; ++i) {
+          interleaved[i * 2 + 0] = cb[i];
+          interleaved[i * 2 + 1] = cr[i];
+        }
+        staging_->uploadTexture(cTex.get(), 0, 0, 0, cw, ch, 1, 0, 0, interleaved.data(), 0);
+      }
+    }
+
+    const MTL::ResourceID yRid = yTex->gpuResourceID();
+    const MTL::ResourceID cRid = cTex->gpuResourceID();
+    MetalImage img;
+    img.format = MTL::PixelFormatR8Unorm;
+    img.width = w;
+    img.height = h;
+    img.texture = std::move(yTex);
+    img.yuvChroma = std::move(cTex);
+    const TextureHandle handle = textures_.create(std::move(img));
+    ensureTextureCapacity(handle.index());
+    static_cast<MTL::ResourceID*>(textureHeap_->contents())[handle.index()] = yRid;
+    static_cast<MTL::ResourceID*>(yuvChromaHeap_->contents())[handle.index()] = cRid;
+    return {this, handle};
+  }
+
   const uint32_t numSamples = desc.numSamples ? desc.numSamples : 1;
   NS::SharedPtr<MTL::TextureDescriptor> td = ns::make<MTL::TextureDescriptor>();
   td->setTextureType(toMTLTextureType(desc.type, desc.numLayers, numSamples));
@@ -805,7 +918,7 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
   td->setMipmapLevelCount(desc.numMipLevels);
   td->setArrayLength(desc.numLayers ? desc.numLayers : 1);
   td->setSampleCount(numSamples);
-  td->setUsage(toMTLTextureUsage(desc.usage));
+  td->setUsage(toMTLTextureUsage(desc.usage) | MTL::TextureUsagePixelFormatView);
   td->setStorageMode(toMTLStorageMode(desc.storage));
 
   NS::SharedPtr<MTL::Texture> texture = NS::TransferPtr(device_->newTexture(td.get()));
@@ -831,6 +944,45 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
   const TextureHandle handle = textures_.create(std::move(img));
   ensureTextureCapacity(handle.index());
   static_cast<MTL::ResourceID*>(textureHeap_->contents())[handle.index()] = rid;
+  static_cast<MTL::ResourceID*>(yuvChromaHeap_->contents())[handle.index()] = rid;
+  return {this, handle};
+}
+
+Holder<TextureHandle> MetalContext::createTextureView(TextureHandle texture,
+                                                      const TextureViewDesc& desc,
+                                                      const char* debugName,
+                                                      Result* outResult) {
+  const MetalImage* parent = textures_.get(texture);
+  if (!parent || !parent->texture) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "createTextureView: invalid parent texture");
+    return {};
+  }
+
+  NS::SharedPtr<MTL::TextureViewDescriptor> vd = ns::make<MTL::TextureViewDescriptor>();
+  vd->setPixelFormat(parent->format);
+  vd->setTextureType(toMTLTextureType(desc.type, desc.numLayers, 1));
+  vd->setLevelRange(NS::Range(desc.mipLevel, desc.numMipLevels));
+  vd->setSliceRange(NS::Range(desc.layer, desc.numLayers));
+  vd->setSwizzle(toMTLSwizzleChannels(desc.components));
+
+  NS::SharedPtr<MTL::Texture> view = NS::TransferPtr(parent->texture->newTextureView(vd.get()));
+  if (!view) {
+    Result::setResult(outResult, Result::Code::RuntimeError, "newTextureView failed");
+    return {};
+  }
+  ns::setLabel(view.get(), debugName ? debugName : "");
+  addResident(view.get());
+
+  const MTL::ResourceID rid = view->gpuResourceID();
+  MetalImage img;
+  img.format = parent->format;
+  img.width = uint32_t(view->width());
+  img.height = uint32_t(view->height());
+  img.texture = std::move(view);
+  const TextureHandle handle = textures_.create(std::move(img));
+  ensureTextureCapacity(handle.index());
+  static_cast<MTL::ResourceID*>(textureHeap_->contents())[handle.index()] = rid;
+  static_cast<MTL::ResourceID*>(yuvChromaHeap_->contents())[handle.index()] = rid;
   return {this, handle};
 }
 
@@ -863,6 +1015,60 @@ Holder<SamplerHandle> MetalContext::createSampler(const SamplerStateDesc& desc, 
   return {this, handle};
 }
 
+Holder<QueryPoolHandle> MetalContext::createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult) {
+  NS::SharedPtr<MTL4::CounterHeapDescriptor> chd = ns::make<MTL4::CounterHeapDescriptor>();
+  chd->setType(MTL4::CounterHeapTypeTimestamp);
+  chd->setCount(numQueries);
+
+  NS::Error* error = nullptr;
+  NS::SharedPtr<MTL4::CounterHeap> heap = NS::TransferPtr(device_->newCounterHeap(chd.get(), &error));
+  if (!heap) {
+    LLOGE("createQueryPool failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    Result::setResult(outResult, Result::Code::RuntimeError, "newCounterHeap failed");
+    return {};
+  }
+  ns::setLabel(heap.get(), debugName ? debugName : "");
+
+  MetalQueryPool qp;
+  qp.heap = std::move(heap);
+  qp.count = numQueries;
+  return {this, queryPools_.create(std::move(qp))};
+}
+
+void MetalContext::destroy(QueryPoolHandle handle) {
+  if (!queryPools_.get(handle))
+    return;
+  deferredTask([this, handle]() { queryPools_.destroy(handle); });
+}
+
+bool MetalContext::getQueryPoolResults(QueryPoolHandle pool,
+                                       uint32_t firstQuery,
+                                       uint32_t queryCount,
+                                       size_t dataSize,
+                                       void* outData,
+                                       size_t stride) const {
+  const MetalQueryPool* qp = queryPools_.get(pool);
+  if (!qp || !qp->heap)
+    return false;
+
+  NS::Data* resolved = qp->heap->resolveCounterRange(NS::Range(firstQuery, queryCount));
+  if (!resolved)
+    return false;
+  using BytesMsg = const void* (*)(const void*, SEL);
+  const void* rawBytes = reinterpret_cast<BytesMsg>(objc_msgSend)(resolved, sel_registerName("bytes"));
+  const MTL4::TimestampHeapEntry* entries = static_cast<const MTL4::TimestampHeapEntry*>(rawBytes);
+  if (!entries)
+    return false;
+  uint8_t* dst = static_cast<uint8_t*>(outData);
+  for (uint32_t i = 0; i < queryCount; ++i) {
+    if ((i + 1) * stride > dataSize)
+      break;
+    const uint64_t value = entries[i].timestamp;
+    std::memcpy(dst + size_t(i) * stride, &value, sizeof(value));
+  }
+  return true;
+}
+
 static const char* kBindlessPreamble = R"(
 #include <metal_stdlib>
 using namespace metal;
@@ -886,6 +1092,7 @@ struct lvkSamplersComparison { array<sampler,                                   
 struct lvkImages2D           { array<texture2d<float, access::read_write>,        LVK_BINDLESS_TEXTURES> data; };
 struct lvkImages3D           { array<texture3d<float, access::read_write>,        LVK_BINDLESS_TEXTURES> data; };
 struct lvkAccelStructs       { array<raytracing::instance_acceleration_structure, LVK_BINDLESS_ACCEL_STRUCTS> data; };
+struct lvkYUVChroma          { array<texture2d<float>,                            LVK_BINDLESS_TEXTURES> data; };
 
 #define LVK_BINDLESS_ARGS \
   device const lvkTextures2D&         kTextures2D         [[buffer(2)]], \
@@ -896,7 +1103,16 @@ struct lvkAccelStructs       { array<raytracing::instance_acceleration_structure
   constant lvkSamplersComparison&     kSamplersComparison [[buffer(7)]], \
   device const lvkImages2D&           kImages2D           [[buffer(8)]], \
   device const lvkImages3D&           kImages3D           [[buffer(9)]], \
-  device const lvkAccelStructs&       kTLAS               [[buffer(10)]]
+  device const lvkAccelStructs&       kTLAS               [[buffer(10)]], \
+  device const lvkYUVChroma&          kYUVChroma          [[buffer(11)]]
+
+inline float4 lvkSampleYUV(float y, float2 cbcr) {
+  const float Y  = (y - 16.0 / 255.0) * (255.0 / 219.0);
+  const float Cb = (cbcr.x - 128.0 / 255.0) * (255.0 / 224.0);
+  const float Cr = (cbcr.y - 128.0 / 255.0) * (255.0 / 224.0);
+  const float3 rgb = float3(Y + 1.5748 * Cr, Y - 0.1873 * Cb - 0.4681 * Cr, Y + 1.8556 * Cb);
+  return float4(saturate(rgb), 1.0);
+}
 
 #define textureBindless2D(tid, sid, uv)            kTextures2D.data[tid].sample(kSamplers.data[sid], (uv))
 #define textureBindless2DLod(tid, sid, uv, lod)    kTextures2D.data[tid].sample(kSamplers.data[sid], (uv), level(lod))
@@ -905,6 +1121,7 @@ struct lvkAccelStructs       { array<raytracing::instance_acceleration_structure
 #define textureBindlessCubeLod(tid, sid, dir, lod) kTexturesCube.data[tid].sample(kSamplers.data[sid], (dir), level(lod))
 #define textureBindlessSize2D(tid)                 uint2(kTextures2D.data[tid].get_width(), kTextures2D.data[tid].get_height())
 #define textureBindless2DShadow(tid, sid, uvw)     kTexturesDepth2D.data[tid].sample_compare(kSamplersComparison.data[sid], (uvw).xy, (uvw).z)
+#define textureBindlessYUV(tid, sid, uv)           lvkSampleYUV(kTextures2D.data[tid].sample(kSamplers.data[sid], (uv)).r, kYUVChroma.data[tid].sample(kSamplers.data[sid], (uv)).rg)
 #define imageBindlessLoad2D(tid, pos)              kImages2D.data[tid].read(uint2(pos))
 #define imageBindlessStore2D(tid, pos, val)        kImages2D.data[tid].write((val), uint2(pos))
 #define imageBindlessLoad3D(tid, pos)              kImages3D.data[tid].read(uint3(pos))
@@ -983,6 +1200,7 @@ void MetalContext::setShaderModuleMetadata(ShaderModuleHandle handle, const Shad
     return;
   const Dimensions& tg = metadata.threadgroupSize;
   sm->threadgroupSize = MTL::Size(tg.width ? tg.width : 1, tg.height ? tg.height : 1, tg.depth ? tg.depth : 1);
+  sm->viewCount = metadata.viewCount ? metadata.viewCount : 1;
 }
 
 void MetalContext::setIndirectBufferMetadata(BufferHandle indirectBuffer, const IndirectBufferMetadata& metadata) {
@@ -1155,6 +1373,8 @@ Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipe
   rpd->setRasterSampleCount(desc.samplesCount ? desc.samplesCount : 1);
   rpd->setAlphaToCoverageEnabled(desc.alphaToCoverage);
   rpd->setSupportIndirectCommandBuffers(true);
+  if (vert->viewCount > 1)
+    rpd->setMaxVertexAmplificationCount(vert->viewCount);
 
   NS::Error* error = nullptr;
   NS::SharedPtr<MTL::RenderPipelineState> pipeline = NS::TransferPtr(device_->newRenderPipelineState(rpd.get(), &error));
@@ -1204,6 +1424,9 @@ Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTabl
     case ArgumentKind::Images3D:
     case ArgumentKind::TexturesDepth2D:
       table->setAddress(textureHeap_->gpuAddress(), i);
+      break;
+    case ArgumentKind::TexturesYUVChroma:
+      table->setAddress(yuvChromaHeap_->gpuAddress(), i);
       break;
     case ArgumentKind::Samplers:
     case ArgumentKind::SamplersComparison:
@@ -1493,8 +1716,11 @@ void MetalContext::destroy(TextureHandle handle) {
   if (!textures_.get(handle))
     return;
   deferredTask([this, handle]() {
-    if (const MetalImage* img = textures_.get(handle))
+    if (const MetalImage* img = textures_.get(handle)) {
       removeResident(img->texture.get());
+      if (img->yuvChroma)
+        removeResident(img->yuvChroma.get());
+    }
     textures_.destroy(handle);
   });
 }
@@ -1776,6 +2002,10 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
 
   NS::SharedPtr<MTL4::RenderPassDescriptor> rpd = ns::make<MTL4::RenderPassDescriptor>();
 
+  const uint32_t viewCount = renderPass.viewMask ? uint32_t(__builtin_popcount(renderPass.viewMask)) : 1;
+  const bool multiview = viewCount > 1;
+  LVK_ASSERT_MSG(viewCount <= 32, "viewMask has more than 32 views");
+
   uint32_t rtWidth = 0;
   uint32_t rtHeight = 0;
   const uint32_t nColor = framebuffer.getNumColorAttachments();
@@ -1784,7 +2014,8 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
     LVK_ASSERT(img && img->texture);
     MTL::RenderPassColorAttachmentDescriptor* att = rpd->colorAttachments()->object(i);
     att->setTexture(img->texture.get());
-    att->setSlice(renderPass.color[i].layer);
+    if (!multiview)
+      att->setSlice(renderPass.color[i].layer);
     att->setLevel(renderPass.color[i].level);
     att->setLoadAction(toLoadAction(renderPass.color[i].loadOp));
     const bool resolve = !framebuffer.color[i].resolveTexture.empty();
@@ -1807,7 +2038,8 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
     const MetalImage* resolveImg = resolve ? ctx_->getImage(framebuffer.depthStencil.resolveTexture) : nullptr;
     MTL::RenderPassDepthAttachmentDescriptor* att = rpd->depthAttachment();
     att->setTexture(img->texture.get());
-    att->setSlice(renderPass.depth.layer);
+    if (!multiview)
+      att->setSlice(renderPass.depth.layer);
     att->setLevel(renderPass.depth.level);
     att->setLoadAction(toLoadAction(renderPass.depth.loadOp));
     if (resolve) {
@@ -1820,7 +2052,8 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
     if (formatHasStencil(img->format)) {
       MTL::RenderPassStencilAttachmentDescriptor* satt = rpd->stencilAttachment();
       satt->setTexture(img->texture.get());
-      satt->setSlice(renderPass.stencil.layer);
+      if (!multiview)
+        satt->setSlice(renderPass.stencil.layer);
       satt->setLevel(renderPass.stencil.level);
       satt->setLoadAction(toLoadAction(renderPass.stencil.loadOp));
       if (resolve) {
@@ -1836,11 +2069,20 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
 
   rpd->setRenderTargetWidth(rtWidth);
   rpd->setRenderTargetHeight(rtHeight);
+  if (multiview)
+    rpd->setRenderTargetArrayLength(viewCount);
 
   encoder_ = ctx_->commandBuffer()->renderCommandEncoder(rpd.get());
   depthStencilDirty_ = true;
   lastDepthStencilState_ = nullptr;
   encoder_->setStencilReferenceValue(stencilRef_);
+
+  if (multiview) {
+    MTL::VertexAmplificationViewMapping mappings[32] = {};
+    for (uint32_t v = 0; v < viewCount; ++v)
+      mappings[v].renderTargetArrayIndexOffset = v;
+    encoder_->setVertexAmplificationCount(viewCount, mappings);
+  }
 
   const MTL::Stages shaderReadStages = MTL::StageVertex | MTL::StageFragment;
   if (!deps.sampledImages.empty()) {
@@ -2232,6 +2474,23 @@ void CommandBuffer::cmdSetBlendColor(const float color[4]) {
 void CommandBuffer::cmdSetDepthBias(float constantFactor, float slopeFactor, float clamp) {
   if (encoder_)
     encoder_->setDepthBias(constantFactor, slopeFactor, clamp);
+}
+
+void CommandBuffer::cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) {
+  if (MTL4::CounterHeap* heap = ctx_->getQueryHeap(pool))
+    heap->invalidateCounterRange(NS::Range(firstQuery, queryCount));
+}
+
+void CommandBuffer::cmdWriteTimestamp(QueryPoolHandle pool, uint32_t query) {
+  MTL4::CounterHeap* heap = ctx_->getQueryHeap(pool);
+  if (!heap)
+    return;
+  if (computeEncoder_)
+    computeEncoder_->writeTimestamp(MTL4::TimestampGranularityPrecise, heap, query);
+  else if (encoder_)
+    encoder_->writeTimestamp(MTL4::TimestampGranularityPrecise, MTL::RenderStageFragment, heap, query);
+  else if (MTL4::CommandBuffer* cb = ctx_->commandBuffer())
+    cb->writeTimestampIntoHeap(heap, query);
 }
 
 void CommandBuffer::cmdPushDebugGroupLabel(const char* label, uint32_t) const {

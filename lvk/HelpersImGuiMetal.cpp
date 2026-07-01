@@ -152,9 +152,11 @@ void ImGuiRenderer::beginFrame(const lvk::Framebuffer& desc) {
   io.IniFilename = nullptr;
 
   const lvk::Format colorFormat = ctx_.getFormat(desc.color[0].texture);
-  if (pipeline_.empty() || pipelineColorFormat_ != colorFormat) {
+  const lvk::Format depthFormat = desc.depthStencil.texture ? ctx_.getFormat(desc.depthStencil.texture) : lvk::Format_Invalid;
+  if (pipeline_.empty() || pipelineColorFormat_ != colorFormat || pipelineDepthFormat_ != depthFormat) {
     pipeline_ = createNewPipelineState(desc);
     pipelineColorFormat_ = colorFormat;
+    pipelineDepthFormat_ = depthFormat;
   }
 
   const lvk::Dimensions dim = ctx_.getDimensions(desc.color[0].texture);

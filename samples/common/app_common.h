@@ -30,6 +30,10 @@ bool writeScreenshotPNG(lvk::IContext& ctx, lvk::TextureHandle texture, uint32_t
 
 struct ISample {
   virtual ~ISample() = default;
+
+  // Called before the context is created so a sample can request e.g. an HDR swapchain color space.
+  virtual void configureContext(lvk::metal::ContextConfig& cfg) const {}
+
   virtual void init(lvk::metal::IMetalContext& ctx,
                     GLFWwindow* window,
                     uint32_t width,
