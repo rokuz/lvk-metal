@@ -32,6 +32,7 @@ struct MetalBuffer {
 struct MetalImage {
   NS::SharedPtr<MTL::Texture> texture;
   NS::SharedPtr<MTL::Texture> yuvChroma;
+  CA::MetalDrawable* drawable = nullptr;
   MTL::PixelFormat format = MTL::PixelFormatInvalid;
   uint32_t width = 0;
   uint32_t height = 0;
@@ -149,6 +150,9 @@ class CommandBuffer : public IMetalCommandBuffer {
   CommandBuffer() = default;
   explicit CommandBuffer(MetalContext* ctx) : ctx_(ctx) {}
 
+  friend class MetalContext;
+  friend class MetalValidatedContext;
+
   // --- No-op for Metal 4 or for LVK-Metal
   void cmdTransitionToGeneral(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const override {}
   void cmdTransitionToShaderReadOnly(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const override {}
@@ -264,6 +268,7 @@ class CommandBuffer : public IMetalCommandBuffer {
   void applyDepthBias();
 
   MetalContext* ctx_ = nullptr;
+  const MetalImmediateCommands::CommandBufferWrapper* wrapper_ = nullptr;
   MTL4::RenderCommandEncoder* encoder_ = nullptr;
   MTL4::ComputeCommandEncoder* computeEncoder_ = nullptr;
   MTL4::MachineLearningCommandEncoder* mlEncoder_ = nullptr;
@@ -428,9 +433,6 @@ class MetalContext : public IMetalContext {
     return qp ? qp->heap.get() : nullptr;
   }
 
-  MTL4::CommandBuffer* commandBuffer() const {
-    return currentWrapper_ ? currentWrapper_->cmdBuf.get() : nullptr;
-  }
   const MetalImage* getImage(TextureHandle handle) const {
     return textures_.get(handle);
   }
@@ -464,21 +466,27 @@ class MetalContext : public IMetalContext {
   ArgumentTableHandle defaultArgumentTable() const {
     return defaultArgumentTable_;
   }
-  MTL::GPUAddress writePushConstants(const void* data, size_t size, size_t offset);
+  MTL::GPUAddress writePushConstants(const void* data,
+                                     size_t size,
+                                     size_t offset,
+                                     const MetalImmediateCommands::CommandBufferWrapper* wrapper);
   MTL::DepthStencilState* getDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
 
   struct StagingAlloc {
     MTL::Buffer* buffer = nullptr;
     uint32_t offset = 0;
   };
-  StagingAlloc writeUploadStaging(const void* data, size_t size);
+  StagingAlloc writeUploadStaging(const void* data, size_t size, const MetalImmediateCommands::CommandBufferWrapper* wrapper);
 
-  void encodeIndirectDraws(const Dependencies& deps);
+  void encodeIndirectDraws(const Dependencies& deps, const MetalImmediateCommands::CommandBufferWrapper* wrapper);
+
+ protected:
+  const MetalImmediateCommands::CommandBufferWrapper* beginCommandBuffer();
 
  private:
   bool ensureIndirectEncoder();
   void createIndirectCommandBufferFor(MetalBuffer& mb, uint32_t elementStride);
-  void growUploadRing(uint32_t minRegionBytes);
+  void growUploadRing(uint32_t minRegionBytes, const MetalImmediateCommands::CommandBufferWrapper* wrapper);
   void generateMipmapImmediate(MTL::Texture* texture);
   NS::SharedPtr<MTL::DepthStencilState> makeDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
   NS::SharedPtr<MTL::Function> specializeFunction(const MetalShaderModule* sm, const SpecializationConstantDesc& spec);
@@ -491,7 +499,7 @@ class MetalContext : public IMetalContext {
   void ensureBufferCapacity(uint32_t index);
   void ensureAccelStructCapacity(uint32_t index);
   void rebindArgumentTableHeaps();
-  void growConstantsRing();
+  void growConstantsRing(const MetalImmediateCommands::CommandBufferWrapper* wrapper);
   void addResident(const MTL::Allocation* allocation);
   void removeResident(const MTL::Allocation* allocation);
   void flushResidency();
@@ -506,12 +514,10 @@ class MetalContext : public IMetalContext {
   bool residencyDirty_ = false;
   std::unique_ptr<MetalImmediateCommands> immediate_;
   std::unique_ptr<MetalStagingDevice> staging_;
-  const MetalImmediateCommands::CommandBufferWrapper* currentWrapper_ = nullptr;
   bool renderEncoderOpen_ = false;
 
   CA::MetalLayer* metalLayer_ = nullptr;
-  CA::MetalDrawable* currentDrawable_ = nullptr;
-  NS::AutoreleasePool* framePool_ = nullptr;
+  NS::AutoreleasePool* autoreleasePool_ = nullptr;
 
   uint32_t framesInFlight_ = 0;
   uint32_t currentImageIndex_ = 0;
@@ -587,7 +593,6 @@ class MetalContext : public IMetalContext {
 
   TextureHandle swapchainTextureHandle_;
   ArgumentTableHandle defaultArgumentTable_;
-  CommandBuffer cmdBuffer_;
 };
 
 class MetalValidatedCommandBuffer final : public CommandBuffer {
@@ -623,9 +628,6 @@ class MetalValidatedContext final : public MetalContext {
 
   Holder<TextureHandle> createTexture(const TextureDesc& desc, const char* debugName = nullptr, Result* outResult = nullptr) override;
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
-
- private:
-  MetalValidatedCommandBuffer validatedCmdBuffer_{this};
 };
 
 } // namespace lvk::metal
