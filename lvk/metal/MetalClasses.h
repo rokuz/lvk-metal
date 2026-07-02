@@ -220,7 +220,7 @@ class CommandBuffer : public IMetalCommandBuffer {
 
   void cmdSetBlendColor(const float color[4]) override;
   void cmdSetDepthBias(float constantFactor, float slopeFactor, float clamp = 0.0f) override;
-  void cmdSetDepthBiasEnable(bool enable) override {} // TODO: implement
+  void cmdSetDepthBiasEnable(bool enable) override;
 
   void cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) override;
   void cmdWriteTimestamp(QueryPoolHandle pool, uint32_t query) override;
@@ -256,6 +256,7 @@ class CommandBuffer : public IMetalCommandBuffer {
   void endMachineLearningEncoder();
   MTL4::ComputeCommandEncoder* beginTransferEncoder();
   void applyDepthStencilState();
+  void applyDepthBias();
 
   MetalContext* ctx_ = nullptr;
   MTL4::RenderCommandEncoder* encoder_ = nullptr;
@@ -280,6 +281,10 @@ class CommandBuffer : public IMetalCommandBuffer {
   bool depthStencilDirty_ = true;
   MTL::DepthStencilState* lastDepthStencilState_ = nullptr;
   uint32_t stencilRef_ = 0;
+  float depthBiasConstantFactor_ = 0.0f;
+  float depthBiasSlopeFactor_ = 0.0f;
+  float depthBiasClamp_ = 0.0f;
+  bool depthBiasEnabled_ = false;
 };
 
 class MetalContext : public IMetalContext {
@@ -374,7 +379,8 @@ class MetalContext : public IMetalContext {
   uint8_t* getMappedPtr(BufferHandle handle) const override;
   uint64_t gpuAddress(BufferHandle handle, size_t offset = 0) const override;
   uint32_t getMaxStorageBufferRange() const override {
-    return UINT32_MAX; // TODO: check if we have limits
+    const uint64_t maxLen = device_ ? uint64_t(device_->maxBufferLength()) : 0;
+    return maxLen > UINT32_MAX ? UINT32_MAX : uint32_t(maxLen);
   }
 
   Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override;
@@ -392,7 +398,7 @@ class MetalContext : public IMetalContext {
     return swapchainColorSpace_;
   }
   uint32_t getSwapchainCurrentImageIndex() const override {
-    return 0; // TODO: use current inflight frame index
+    return currentImageIndex_;
   }
   uint32_t getNumSwapchainImages() const override {
     return framesInFlight_;
@@ -501,6 +507,7 @@ class MetalContext : public IMetalContext {
   NS::AutoreleasePool* framePool_ = nullptr;
 
   uint32_t framesInFlight_ = 0;
+  uint32_t currentImageIndex_ = 0;
 
   MTL::PixelFormat swapchainFormat_ = MTL::PixelFormatBGRA8Unorm;
   ColorSpace swapchainColorSpace_ = ColorSpace_SRGB_NONLINEAR;

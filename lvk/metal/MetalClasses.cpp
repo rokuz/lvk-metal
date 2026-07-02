@@ -564,6 +564,7 @@ SubmitHandle MetalContext::submit(lvk::ICommandBuffer&, TextureHandle present) {
   if (currentDrawable_) {
     currentDrawable_->release();
     currentDrawable_ = nullptr;
+    currentImageIndex_ = framesInFlight_ ? (currentImageIndex_ + 1) % framesInFlight_ : 0;
   }
 
   currentWrapper_ = nullptr;
@@ -2363,6 +2364,7 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
   encoder_ = ctx_->commandBuffer()->renderCommandEncoder(rpd.get());
   depthStencilDirty_ = true;
   lastDepthStencilState_ = nullptr;
+  depthBiasEnabled_ = false;
   encoder_->setStencilReferenceValue(stencilRef_);
 
   if (multiview) {
@@ -2812,8 +2814,24 @@ void CommandBuffer::cmdSetBlendColor(const float color[4]) {
 }
 
 void CommandBuffer::cmdSetDepthBias(float constantFactor, float slopeFactor, float clamp) {
-  if (encoder_)
-    encoder_->setDepthBias(constantFactor, slopeFactor, clamp);
+  depthBiasConstantFactor_ = constantFactor;
+  depthBiasSlopeFactor_ = slopeFactor;
+  depthBiasClamp_ = clamp;
+  applyDepthBias();
+}
+
+void CommandBuffer::cmdSetDepthBiasEnable(bool enable) {
+  depthBiasEnabled_ = enable;
+  applyDepthBias();
+}
+
+void CommandBuffer::applyDepthBias() {
+  if (!encoder_)
+    return;
+  if (depthBiasEnabled_)
+    encoder_->setDepthBias(depthBiasConstantFactor_, depthBiasSlopeFactor_, depthBiasClamp_);
+  else
+    encoder_->setDepthBias(0.0f, 0.0f, 0.0f);
 }
 
 void CommandBuffer::cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) {
