@@ -64,6 +64,7 @@ enum class ArgumentKind : uint8_t {
   Constants,
   AccelStructs,
   TexturesYUVChroma,
+  Images3DUint,
 };
 
 struct ArgumentTableDesc {

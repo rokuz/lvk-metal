@@ -2,11 +2,16 @@
 
 #include <lvk/LVK-Metal.h>
 
+#if !defined(LVK_METAL_IMGUI_EXTERNAL)
 #include "imgui/backends/imgui_impl_glfw.cpp"
 #include "imgui/imgui.cpp"
 #include "imgui/imgui_draw.cpp"
 #include "imgui/imgui_tables.cpp"
 #include "imgui/imgui_widgets.cpp"
+#else // LVK_METAL_IMGUI_EXTERNAL
+#include "imgui/backends/imgui_impl_glfw.h"
+#include <GLFW/glfw3.h>
+#endif // !defined(LVK_METAL_IMGUI_EXTERNAL)
 
 #include <math.h>
 #include <string.h>

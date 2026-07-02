@@ -205,7 +205,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
     return false;
 
   ArgumentTableDesc defaultDesc;
-  defaultDesc.numKinds = 12;
+  defaultDesc.numKinds = 13;
   defaultDesc.kinds[0] = ArgumentKind::Constants;
   defaultDesc.kinds[1] = ArgumentKind::Buffers;
   defaultDesc.kinds[2] = ArgumentKind::Textures2D;
@@ -218,6 +218,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   defaultDesc.kinds[9] = ArgumentKind::Images3D;
   defaultDesc.kinds[10] = ArgumentKind::AccelStructs;
   defaultDesc.kinds[11] = ArgumentKind::TexturesYUVChroma;
+  defaultDesc.kinds[12] = ArgumentKind::Images3DUint;
   defaultDesc.debugName = "lvk-metal.default-argtable";
   defaultArgumentTable_ = createArgumentTable(defaultDesc, nullptr).release();
 
@@ -390,6 +391,7 @@ void MetalContext::rebindArgumentTableHeaps() {
       case ArgumentKind::TexturesCube:
       case ArgumentKind::Images2D:
       case ArgumentKind::Images3D:
+      case ArgumentKind::Images3DUint:
       case ArgumentKind::TexturesDepth2D:
         at.table->setAddress(textureHeap_->gpuAddress(), i);
         break;
@@ -1679,6 +1681,7 @@ Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTabl
     case ArgumentKind::TexturesCube:
     case ArgumentKind::Images2D:
     case ArgumentKind::Images3D:
+    case ArgumentKind::Images3DUint:
     case ArgumentKind::TexturesDepth2D:
       table->setAddress(textureHeap_->gpuAddress(), i);
       break;
