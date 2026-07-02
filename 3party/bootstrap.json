@@ -31,5 +31,14 @@
         "url": "https://github.com/shader-slang/slang/releases/download/v2026.9.1/slang-2026.9.1-macos-aarch64.zip"
       }
     ]
+  },
+  {
+    "name": "CuNNy",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/funnyplanter/CuNNy.git",
+      "revision": "origin/master",
+      "recursive": false
+    }
   }
 ]

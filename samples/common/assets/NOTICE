@@ -1,0 +1,9 @@
+cunny.mtlpackage is a Metal ML package converted from a pretrained model ("fast-NVL" by default) of
+
+    CuNNy — https://github.com/funnyplanter/CuNNy
+    Copyright (c) the CuNNy authors, licensed under the GNU LGPL-3.0.
+
+It is a derivative work of that model and is therefore also covered by the LGPL-3.0
+(see the CuNNy dependency for the full license text). Regenerate it from the CuNNy
+weights with tools/ML/upscaler.py. The rest of this repository is MIT-licensed; this
+asset is the only LGPL-3.0 component.

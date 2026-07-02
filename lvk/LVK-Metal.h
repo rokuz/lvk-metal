@@ -160,8 +160,8 @@ class IMetalCommandBuffer : public lvk::ICommandBuffer {
 class IMetalContext : public lvk::IContext {
  public:
   using lvk::IContext::destroy;
-  using lvk::IContext::upload;
   using lvk::IContext::download;
+  using lvk::IContext::upload;
 
   ICommandBuffer& acquireCommandBuffer(bool dedicatedCompute = false) override {
     return acquireMetalCommandBuffer(dedicatedCompute);
@@ -182,7 +182,7 @@ class IMetalContext : public lvk::IContext {
   virtual Result download(TensorHandle handle, void* data, size_t size) = 0;
 
   [[nodiscard]] virtual Holder<MLPipelineHandle> createMachineLearningPipeline(const MachineLearningPipelineDesc& desc,
-                                                                                           Result* outResult = nullptr) = 0;
+                                                                               Result* outResult = nullptr) = 0;
   virtual void destroy(MLPipelineHandle handle) = 0;
 
   virtual bool startGpuCapture(const char* outputPath) = 0;

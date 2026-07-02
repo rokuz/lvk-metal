@@ -18,6 +18,7 @@
 
 #include "app_common.h"
 #include "bistro_mesh.h"
+#include "upscaler.h"
 
 #ifdef LVK_METAL_SAMPLE_USE_SLANG
 #include "slang_runtime.h"
@@ -525,6 +526,25 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
         .storage = lvk::StorageType_Device,
         .debugName = "storageImage",
     });
+    aoHalf_ = ctx.createTexture({
+        .type = lvk::TextureType_2D,
+        .format = lvk::Format_BGRA_UN8,
+        .dimensions = {width_ / 2, height_ / 2, 1},
+        .usage = lvk::TextureUsageBits_Storage | lvk::TextureUsageBits_Sampled,
+        .storage = lvk::StorageType_Device,
+        .debugName = "aoHalfRes",
+    });
+    upscaled_ = ctx.createTexture({
+        .type = lvk::TextureType_2D,
+        .format = lvk::Format_BGRA_UN8,
+        .dimensions = {width_, height_, 1},
+        .usage = lvk::TextureUsageBits_Storage | lvk::TextureUsageBits_Sampled,
+        .storage = lvk::StorageType_Device,
+        .debugName = "upscaled",
+    });
+    upscaler_.init(ctx, width_, height_, LVK_METAL_CUNNY_PACKAGE, true);
+    if (const char* m = getenv("LVKM_MODE"))
+      mode_ = std::atoi(m);
     sampler_ = ctx.createSampler({.debugName = "sampler"});
 
     lvk::Holder<lvk::ShaderModuleHandle> trace;
@@ -620,7 +640,7 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
         .vertices = ctx_->gpuAddress(vertexBuffer_),
         .hashHi = ctx_->gpuAddress(hashHi_),
         .hashLo = ctx_->gpuAddress(hashLo_),
-        .outImage = storageImage_.index(),
+        .outImage = (mode_ != 0 ? aoHalf_ : storageImage_).index(),
         .tlas = tlas_.index(),
         .enableShadows = enableShadows_ ? 1u : 0u,
         .enableAO = enableAO_ ? 1u : 0u,
@@ -632,20 +652,27 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
         .smin = smin_,
         .maxSamples = uint32_t(maxSamples_),
         .hashMapSize = kHashMapSize,
-        .resolutionY = float(height_),
+        .resolutionY = float(mode_ != 0 ? height_ / 2 : height_),
         .enableFiltering = enableFiltering_ ? 1u : 0u,
         .enableSpatialHash = enableSpatialHash_ ? 1u : 0u,
         .timeVaryingNoise = timeVaryingNoise_ ? 1u : 0u,
     };
 
+    const bool half = mode_ != 0;
+    lvk::TextureHandle aoTarget = half ? aoHalf_ : storageImage_;
     cmd.cmdBindComputePipeline(pipeline_);
     cmd.cmdPushConstants(pc);
-    cmd.cmdTraceRays(width_, height_, 1, {.storageImages = {storageImage_}});
+    cmd.cmdTraceRays(half ? width_ / 2 : width_, half ? height_ / 2 : height_, 1, {.storageImages = {aoTarget}});
+
+    const bool ml = mode_ == 2 && upscaler_.valid();
+    if (ml)
+      upscaler_.upscale(cmd, aoTarget, upscaled_);
+    lvk::TextureHandle presentImg = ml ? lvk::TextureHandle(upscaled_) : aoTarget;
 
     const struct {
       uint32_t tex;
       uint32_t smp;
-    } presentPC = {storageImage_.index(), sampler_.index()};
+    } presentPC = {presentImg.index(), sampler_.index()};
 
     const lvk::Framebuffer fb = {.color = {{.texture = target}}};
     imgui_->beginFrame(fb);
@@ -653,6 +680,8 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
     ImGui::Begin("RTX Ambient Occlusion", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::Text("W/A/S/D move, 1/2 up/down, Shift fast");
     ImGui::Text("hold LMB + drag to look around");
+    ImGui::Separator();
+    ImGui::Combo("Rendering", &mode_, "Full resolution\0" "Bilinear (1/2 -> 1)\0" "ML upscale (1/2 -> 1, CuNNy)\0");
     ImGui::Separator();
     ImGui::Checkbox("Ray traced shadows", &enableShadows_);
     ImGui::SliderFloat3("Light dir", &lightDir_.x, -1.0f, 1.0f);
@@ -674,7 +703,7 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
 
     cmd.cmdBeginRendering({.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}}},
                           fb,
-                          {.sampledImages = {storageImage_}});
+                          {.sampledImages = {presentImg}});
     cmd.cmdBindRenderPipeline(present_);
     cmd.cmdBindViewport({.width = float(width_), .height = float(height_)});
     cmd.cmdPushConstants(presentPC);
@@ -777,6 +806,10 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
   lvk::Holder<lvk::AccelStructHandle> blas_;
   lvk::Holder<lvk::AccelStructHandle> tlas_;
   lvk::Holder<lvk::TextureHandle> storageImage_;
+  lvk::Holder<lvk::TextureHandle> aoHalf_;
+  lvk::Holder<lvk::TextureHandle> upscaled_;
+  lvk::metal::Upscaler upscaler_;
+  int mode_ = 0;
   lvk::Holder<lvk::SamplerHandle> sampler_;
   lvk::Holder<lvk::ComputePipelineHandle> pipeline_;
   lvk::Holder<lvk::RenderPipelineHandle> present_;

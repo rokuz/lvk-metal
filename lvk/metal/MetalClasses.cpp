@@ -1489,9 +1489,8 @@ Holder<TensorHandle> MetalContext::createTensor(const TensorDesc& desc, Result* 
   }
 
   NS::Error* error = nullptr;
-  NS::SharedPtr<MTL::Tensor> tensor =
-      aliasBuffer ? NS::TransferPtr(aliasBuffer->buffer->newTensor(td.get(), desc.bufferOffset, &error))
-                  : NS::TransferPtr(device_->newTensor(td.get(), &error));
+  NS::SharedPtr<MTL::Tensor> tensor = aliasBuffer ? NS::TransferPtr(aliasBuffer->buffer->newTensor(td.get(), desc.bufferOffset, &error))
+                                                  : NS::TransferPtr(device_->newTensor(td.get(), &error));
   if (!tensor) {
     LLOGE("createTensor failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
     Result::setResult(outResult, Result::Code::RuntimeError, "newTensor failed");
@@ -1586,8 +1585,7 @@ Holder<MLPipelineHandle> MetalContext::createMachineLearningPipeline(const Machi
     pd->setInputDimensions(extents.get(), NS::Integer(i));
   }
 
-  NS::SharedPtr<MTL4::MachineLearningPipelineState> state =
-      NS::TransferPtr(compiler_->newMachineLearningPipelineState(pd.get(), &error));
+  NS::SharedPtr<MTL4::MachineLearningPipelineState> state = NS::TransferPtr(compiler_->newMachineLearningPipelineState(pd.get(), &error));
   if (!state) {
     LLOGE("createMachineLearningPipeline: compile failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
     Result::setResult(outResult, Result::Code::RuntimeError, "newMachineLearningPipelineState failed");
@@ -2685,8 +2683,7 @@ void CommandBuffer::cmdBindMachineLearningPipeline(MLPipelineHandle handle) {
 void CommandBuffer::cmdDispatchNetwork() {
   if (!mlEncoder_ || !mlPipeline_)
     return;
-  mlEncoder_->barrierAfterQueueStages(
-      MTL::StageDispatch | MTL::StageBlit, MTL::StageMachineLearning, MTL4::VisibilityOptionDevice);
+  mlEncoder_->barrierAfterQueueStages(MTL::StageDispatch | MTL::StageBlit, MTL::StageMachineLearning, MTL4::VisibilityOptionDevice);
   mlEncoder_->dispatchNetwork(mlPipeline_->intermediatesHeap.get());
   endMachineLearningEncoder();
   pendingMLBarrier_ = true;

@@ -340,8 +340,7 @@ class MetalContext : public IMetalContext {
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<TilePipelineHandle> createTileRenderPipeline(const TileRenderPipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<TensorHandle> createTensor(const TensorDesc& desc, Result* outResult = nullptr) override;
-  Holder<MLPipelineHandle> createMachineLearningPipeline(const MachineLearningPipelineDesc& desc,
-                                                                      Result* outResult = nullptr) override;
+  Holder<MLPipelineHandle> createMachineLearningPipeline(const MachineLearningPipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<ShaderModuleHandle> createShaderModule(const ShaderModuleDesc& desc, Result* outResult = nullptr) override;
   Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult = nullptr) override;
   Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult = nullptr) override;

@@ -279,7 +279,10 @@ class MachineLearning final : public lvk::metal::ISample {
     });
     ready_ = true;
     LLOGL("MachineLearning: GPU-driven NeRF %ux%u, %u samples/ray, %u pts/frame (compute->ML->compute->present)",
-          kRes, kRes, kSamples, numPts);
+          kRes,
+          kRes,
+          kSamples,
+          numPts);
   }
 
   void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float timeSeconds) override {

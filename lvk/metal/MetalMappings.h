@@ -1,7 +1,7 @@
 #pragma once
 
-#include <lvk/LVK.h>
 #include <lvk/LVK-Metal.h>
+#include <lvk/LVK.h>
 
 #include <Metal/Metal.hpp>
 

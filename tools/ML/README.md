@@ -16,6 +16,12 @@ the sample does not require any of it.
   - trains a small MLP on the GPU (Metal / MPS),
   - exports `samples/MachineLearning/assets/nerf.mtlpackage` + `nerf.bin` (camera & volume-render params),
   - also writes a checkpoint `build/nerf.pt` and a preview `build/nerf_preview.png`.
+- **`upscaler.py`** — converts the pretrained **CuNNy** 8x32 2x super-resolution CNN
+  (LGPL-3.0, from the CuNNy dependency at `3party/src/CuNNy`) into
+  `samples/Upscaler/assets/cunny.mtlpackage` for the `Upscaler` sample. The exported net is
+  `cin→8×conv→cout→pixel_shuffle` (conv + clamp01); the residual `+ bilinear(input)` is done
+  in the sample's shader. Writes a `build/upscale_preview.png` (bilinear | CuNNy) to eyeball
+  sharpening. The generated `.mtlpackage` is LGPL-3.0 (see `samples/Upscaler/assets/NOTICE`).
 - **`make_test_mlp.py`** — toolchain smoke test: builds a trivial MLP, runs it through the
   same `torch → coremltools → metal-package-builder` pipeline, and emits `build/test_mlp.mtlpackage`
   + `build/test_mlp.bin` (input/expected vectors) so the C++ ML path can be checked numerically.
@@ -38,6 +44,9 @@ uv pip install --python tools/ML/.venv/bin/python numpy pillow torch coremltools
 ```sh
 # train the NeRF and export nerf.mtlpackage + nerf.bin (a few minutes on Apple Silicon)
 tools/ML/.venv/bin/python tools/ML/nerf.py
+
+# convert the CuNNy 8x32 upscaler to cunny.mtlpackage (needs the CuNNy dependency deployed)
+tools/ML/.venv/bin/python tools/ML/upscaler.py
 
 # optional: verify the torch -> coremltools -> metal-package-builder toolchain
 tools/ML/.venv/bin/python tools/ML/make_test_mlp.py

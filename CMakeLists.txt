@@ -61,6 +61,13 @@ function(lvk_metal_target_add_common target)
   target_include_directories(${target} PRIVATE "${LVK_METAL_ROOT}/samples/common" "${LVK_METAL_LVK_DIR}/third-party/deps/src/stb")
 endfunction()
 
+function(lvk_metal_target_add_upscaler target)
+  target_sources(${target} PRIVATE "${LVK_METAL_ROOT}/samples/common/upscaler.cpp")
+  target_include_directories(${target} PRIVATE "${LVK_METAL_ROOT}/samples/common")
+  target_compile_definitions(${target}
+                             PRIVATE "LVK_METAL_CUNNY_PACKAGE=\"${LVK_METAL_ROOT}/samples/common/assets/cunny.mtlpackage\"")
+endfunction()
+
 function(lvk_metal_target_use_slang target shaders_dir)
   if(NOT LVK_METAL_WITH_SAMPLES_SLANG)
     return()
