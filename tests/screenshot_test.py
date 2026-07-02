@@ -34,6 +34,7 @@ SAMPLES = [
     ("RTX_Textures", "samples/RTX_Textures/RTX_Textures", 60),
     ("RTX_Bistro", "samples/RTX_Bistro/RTX_Bistro", 1),
     ("RTX_AO", "samples/RTX_AO/RTX_AO", 64),
+    ("RTX_IndirectTLAS", "samples/RTX_IndirectTLAS/RTX_IndirectTLAS", 60),
 ]
 
 # Crash in Metal validation layer, check in new version of Xcode/Metal tooling.

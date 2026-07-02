@@ -46,6 +46,7 @@ struct MetalAccelStruct {
   AccelStructType type = AccelStructType_Invalid;
   uint32_t numInstances = 0;
   uint64_t buildScratchSize = 0;
+  bool indirectTLAS = false;
 };
 
 struct MetalSampler {
@@ -235,6 +236,10 @@ class CommandBuffer : public IMetalCommandBuffer {
                     const TextureLayers& dstLayers = {}) override;
   void cmdGenerateMipmap(TextureHandle handle) override;
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
+  void cmdBuildIndirectTLAS(lvk::AccelStructHandle tlas,
+                            lvk::BufferHandle instanceDescriptors,
+                            uint32_t instanceCount,
+                            lvk::BufferHandle instanceCountBuffer = {}) override;
 
   void cmdBindArgumentTable(ArgumentTableHandle handle) override;
   void cmdBindTilePipeline(TilePipelineHandle pipeline) override;
@@ -356,6 +361,8 @@ class MetalContext : public IMetalContext {
 
   void setShaderModuleMetadata(ShaderModuleHandle handle, const ShaderModuleMetadata& metadata) override;
   void setIndirectBufferMetadata(BufferHandle indirectBuffer, const IndirectBufferMetadata& metadata) override;
+
+  uint32_t indirectTLASInstanceDescriptorSize() const override;
 
   void destroy(ComputePipelineHandle handle) override;
   void destroy(RenderPipelineHandle handle) override;
@@ -604,6 +611,10 @@ class MetalValidatedCommandBuffer final : public CommandBuffer {
                                      size_t countBufferOffset,
                                      uint32_t maxDrawCount,
                                      uint32_t stride = 0) override;
+  void cmdBuildIndirectTLAS(lvk::AccelStructHandle tlas,
+                            lvk::BufferHandle instanceDescriptors,
+                            uint32_t instanceCount,
+                            lvk::BufferHandle instanceCountBuffer = {}) override;
 };
 
 class MetalValidatedContext final : public MetalContext {

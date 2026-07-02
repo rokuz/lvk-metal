@@ -128,7 +128,8 @@ bool Upscaler::init(IMetalContext& ctx, uint32_t fullWidth, uint32_t fullHeight,
 
   sampler_ = ctx.createSampler({.debugName = "upscaler.sampler"});
   lvk::Holder<lvk::ShaderModuleHandle> pack = ctx.createShaderModule({kUpscaleMSL, "packInput", lvk::Stage_Comp, "upscaler.pack"});
-  lvk::Holder<lvk::ShaderModuleHandle> combine = ctx.createShaderModule({kUpscaleMSL, "combineOutput", lvk::Stage_Comp, "upscaler.combine"});
+  lvk::Holder<lvk::ShaderModuleHandle> combine =
+      ctx.createShaderModule({kUpscaleMSL, "combineOutput", lvk::Stage_Comp, "upscaler.combine"});
   pack_ = ctx.createComputePipeline({.smComp = pack});
   combine_ = ctx.createComputePipeline({.smComp = combine});
   return true;
@@ -161,8 +162,7 @@ void Upscaler::upscale(ICommandBuffer& cmd, TextureHandle src, TextureHandle dst
     uint32_t srcSampler;
     uint32_t dstImage;
     uint32_t luma;
-  } combinePC = {
-      ctx_->gpuAddress(outBuf_), outW_, outH_, outStride_, src.index(), sampler_.index(), dst.index(), luma_ ? 1u : 0u};
+  } combinePC = {ctx_->gpuAddress(outBuf_), outW_, outH_, outStride_, src.index(), sampler_.index(), dst.index(), luma_ ? 1u : 0u};
   cmd.cmdBindComputePipeline(combine_);
   cmd.cmdPushConstants(combinePC);
   cmd.cmdDispatch({(outW_ * outH_ + 63) / 64, 1, 1}, {.storageImages = {dst}});

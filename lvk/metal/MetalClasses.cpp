@@ -231,7 +231,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
 
   cmdBuffer_ = CommandBuffer(this);
 
-  LLOGL("Metal device: %s", device_->name()->utf8String());
+  LLOGL("Metal device: %s\n", device_->name()->utf8String());
   return true;
 }
 
@@ -1798,6 +1798,22 @@ static NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> makeInstance
   return d;
 }
 
+static NS::SharedPtr<MTL4::IndirectInstanceAccelerationStructureDescriptor> makeIndirectInstanceTlasDescriptor(MTL::GPUAddress instAddr,
+                                                                                                               MTL::GPUAddress countAddr,
+                                                                                                               uint32_t maxInstances) {
+  const uint32_t stride = sizeof(MTL::IndirectAccelerationStructureInstanceDescriptor);
+  NS::SharedPtr<MTL4::IndirectInstanceAccelerationStructureDescriptor> d =
+      ns::make<MTL4::IndirectInstanceAccelerationStructureDescriptor>();
+  d->setMaxInstanceCount(maxInstances);
+  d->setInstanceDescriptorType(MTL::AccelerationStructureInstanceDescriptorTypeIndirect);
+  d->setInstanceDescriptorStride(stride);
+  d->setInstanceDescriptorBuffer(MTL4::BufferRange(instAddr, uint64_t(stride) * (maxInstances ? maxInstances : 1)));
+  d->setInstanceTransformationMatrixLayout(MTL::MatrixLayoutColumnMajor);
+  if (countAddr)
+    d->setInstanceCountBuffer(MTL4::BufferRange(countAddr, sizeof(uint32_t)));
+  return d;
+}
+
 static void translateInstances(const MetalBuffer* src, MTL::Buffer* dst, uint32_t count) {
   if (!src || !src->buffer || src->buffer->storageMode() != MTL::StorageModeShared || !dst)
     return;
@@ -1837,6 +1853,7 @@ Holder<AccelStructHandle> MetalContext::createAccelerationStructure(const AccelS
 
   NS::SharedPtr<MTL4::PrimitiveAccelerationStructureDescriptor> blasDesc;
   NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> tlasDesc;
+  NS::SharedPtr<MTL4::IndirectInstanceAccelerationStructureDescriptor> gpuTlasDesc;
   MTL4::AccelerationStructureDescriptor* asDesc = nullptr;
 
   if (desc.type == AccelStructType_BLAS) {
@@ -1852,15 +1869,21 @@ Holder<AccelStructHandle> MetalContext::createAccelerationStructure(const AccelS
     asDesc = blasDesc.get();
   } else if (desc.type == AccelStructType_TLAS) {
     as.numInstances = desc.buildRange.primitiveCount;
-    const uint64_t instBytes =
-        uint64_t(sizeof(MTL::IndirectAccelerationStructureInstanceDescriptor)) * (as.numInstances ? as.numInstances : 1);
-    as.instanceDescriptors = NS::TransferPtr(device_->newBuffer(instBytes, MTL::ResourceStorageModeShared));
-    ns::setLabel(as.instanceDescriptors.get(), "lvk-metal.tlas.instances");
-    addResident(as.instanceDescriptors.get());
-    translateInstances(buffers_.get(desc.instancesBuffer), as.instanceDescriptors.get(), as.numInstances);
-    tlasDesc = makeInstanceTlasDescriptor(as.instanceDescriptors->gpuAddress(), as.numInstances);
-    as.tlasDescriptor = tlasDesc;
-    asDesc = tlasDesc.get();
+    as.indirectTLAS = desc.instancesBuffer.empty();
+    if (as.indirectTLAS) {
+      gpuTlasDesc = makeIndirectInstanceTlasDescriptor(0, 0, as.numInstances);
+      asDesc = gpuTlasDesc.get();
+    } else {
+      const uint64_t instBytes =
+          uint64_t(sizeof(MTL::IndirectAccelerationStructureInstanceDescriptor)) * (as.numInstances ? as.numInstances : 1);
+      as.instanceDescriptors = NS::TransferPtr(device_->newBuffer(instBytes, MTL::ResourceStorageModeShared));
+      ns::setLabel(as.instanceDescriptors.get(), "lvk-metal.tlas.instances");
+      addResident(as.instanceDescriptors.get());
+      translateInstances(buffers_.get(desc.instancesBuffer), as.instanceDescriptors.get(), as.numInstances);
+      tlasDesc = makeInstanceTlasDescriptor(as.instanceDescriptors->gpuAddress(), as.numInstances);
+      as.tlasDescriptor = tlasDesc;
+      asDesc = tlasDesc.get();
+    }
   } else {
     Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "unsupported acceleration structure type");
     return {};
@@ -1885,7 +1908,8 @@ Holder<AccelStructHandle> MetalContext::createAccelerationStructure(const AccelS
   ns::setLabel(as.scratch.get(), "lvk-metal.accelstruct.scratch");
   addResident(as.scratch.get());
 
-  buildAccelStructImmediate(as.accel.get(), asDesc, as.scratch.get());
+  if (!as.indirectTLAS)
+    buildAccelStructImmediate(as.accel.get(), asDesc, as.scratch.get());
 
   const MTL::ResourceID rid = as.accel->gpuResourceID();
   const AccelStructHandle handle = accelStructs_.create(std::move(as));
@@ -1907,8 +1931,14 @@ AccelStructSizes MetalContext::getAccelStructSizes(const AccelStructDesc& desc, 
       sizes = dev->accelerationStructureSizes(d.get());
     }
   } else if (desc.type == AccelStructType_TLAS) {
-    NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> d = makeInstanceTlasDescriptor(0, desc.buildRange.primitiveCount);
-    sizes = dev->accelerationStructureSizes(d.get());
+    if (desc.instancesBuffer.empty()) {
+      NS::SharedPtr<MTL4::IndirectInstanceAccelerationStructureDescriptor> d =
+          makeIndirectInstanceTlasDescriptor(0, 0, desc.buildRange.primitiveCount);
+      sizes = dev->accelerationStructureSizes(d.get());
+    } else {
+      NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> d = makeInstanceTlasDescriptor(0, desc.buildRange.primitiveCount);
+      sizes = dev->accelerationStructureSizes(d.get());
+    }
   }
   Result::setResult(outResult, Result());
   return AccelStructSizes{
@@ -1916,6 +1946,10 @@ AccelStructSizes MetalContext::getAccelStructSizes(const AccelStructDesc& desc, 
       .updateScratchSize = sizes.refitScratchBufferSize,
       .buildScratchSize = sizes.buildScratchBufferSize,
   };
+}
+
+uint32_t MetalContext::indirectTLASInstanceDescriptorSize() const {
+  return sizeof(MTL::IndirectAccelerationStructureInstanceDescriptor);
 }
 
 uint64_t MetalContext::gpuAddress(AccelStructHandle handle) const {
@@ -2565,6 +2599,38 @@ void CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instanc
   enc->endEncoding();
 }
 
+void CommandBuffer::cmdBuildIndirectTLAS(lvk::AccelStructHandle tlas,
+                                         lvk::BufferHandle instanceDescriptors,
+                                         uint32_t instanceCount,
+                                         lvk::BufferHandle instanceCountBuffer) {
+  const MetalAccelStruct* as = ctx_->getAccelStruct(tlas);
+  if (!as || !as->accel || as->type != AccelStructType_TLAS)
+    return;
+  const MetalBuffer* inst = ctx_->getBuffer(instanceDescriptors);
+  if (!inst || !inst->buffer)
+    return;
+  const MetalBuffer* cnt = ctx_->getBuffer(instanceCountBuffer);
+  const MTL::GPUAddress instAddr = inst->buffer->gpuAddress();
+
+  NS::SharedPtr<MTL4::IndirectInstanceAccelerationStructureDescriptor> gpuDesc;
+  NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> fixedDesc;
+  MTL4::AccelerationStructureDescriptor* desc = nullptr;
+  if (cnt && cnt->buffer) {
+    gpuDesc = makeIndirectInstanceTlasDescriptor(instAddr, cnt->buffer->gpuAddress(), instanceCount);
+    desc = gpuDesc.get();
+  } else {
+    fixedDesc = makeInstanceTlasDescriptor(instAddr, instanceCount);
+    desc = fixedDesc.get();
+  }
+
+  MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
+  enc->barrierAfterQueueStages(MTL::StageDispatch, MTL::StageAccelerationStructure, MTL4::VisibilityOptionDevice);
+  enc->buildAccelerationStructure(as->accel.get(), desc, MTL4::BufferRange(as->scratch->gpuAddress(), as->scratch->length()));
+  enc->barrierAfterStages(
+      MTL::StageAccelerationStructure, MTL::StageDispatch | MTL::StageVertex | MTL::StageFragment, MTL4::VisibilityOptionDevice);
+  enc->endEncoding();
+}
+
 void CommandBuffer::setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table) {
   if (mlEncoder_) {
     mlEncoder_->setArgumentTable(table);
@@ -2957,6 +3023,31 @@ void MetalValidatedCommandBuffer::cmdDrawMeshTasksIndirectCount(BufferHandle, si
   LLOGW(
       "validation: cmdDrawMeshTasksIndirectCount is not supported by lvk-metal - a GPU-side draw-count buffer cannot be resolved when the "
       "indirect command buffer is encoded at cmdBeginRendering()");
+}
+
+void MetalValidatedCommandBuffer::cmdBuildIndirectTLAS(lvk::AccelStructHandle tlas,
+                                                       lvk::BufferHandle instanceDescriptors,
+                                                       uint32_t instanceCount,
+                                                       lvk::BufferHandle instanceCountBuffer) {
+  const MetalAccelStruct* as = context()->getAccelStruct(tlas);
+  if (!as || as->type != AccelStructType_TLAS) {
+    LLOGW("validation: cmdBuildIndirectTLAS requires a valid TLAS acceleration structure");
+  } else {
+    if (!as->indirectTLAS)
+      LLOGW("validation: cmdBuildIndirectTLAS expects an indirect TLAS (create it with an empty instancesBuffer)");
+    if (instanceCount > as->numInstances)
+      LLOGW("validation: cmdBuildIndirectTLAS instanceCount %u exceeds the TLAS capacity %u", instanceCount, as->numInstances);
+    const MetalBuffer* inst = context()->getBuffer(instanceDescriptors);
+    const uint64_t needed = uint64_t(instanceCount) * context()->indirectTLASInstanceDescriptorSize();
+    if (!inst || !inst->buffer)
+      LLOGW("validation: cmdBuildIndirectTLAS requires a valid instanceDescriptors buffer");
+    else if (inst->buffer->length() < needed)
+      LLOGW("validation: cmdBuildIndirectTLAS instanceDescriptors buffer is %llu bytes but %llu are needed for %u instances",
+            (unsigned long long)inst->buffer->length(),
+            (unsigned long long)needed,
+            instanceCount);
+  }
+  CommandBuffer::cmdBuildIndirectTLAS(tlas, instanceDescriptors, instanceCount, instanceCountBuffer);
 }
 
 IMetalCommandBuffer& MetalValidatedContext::acquireMetalCommandBuffer(bool dedicatedCompute) {

@@ -10,7 +10,7 @@ module lvk_metal_bindless;
 #define LVK_BINDLESS_ACCEL_STRUCTS 256
 #endif
 #ifndef LVK_BINDLESS_BUFFERS
-#define LVK_BINDLESS_BUFFERS 16384
+#define LVK_BINDLESS_BUFFERS 32
 #endif
 
 public struct lvkBuffers            { public uint64_t                        data[LVK_BINDLESS_BUFFERS]; };

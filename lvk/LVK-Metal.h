@@ -156,6 +156,11 @@ class IMetalCommandBuffer : public lvk::ICommandBuffer {
 
   virtual void cmdBindMachineLearningPipeline(MLPipelineHandle pipeline) = 0;
   virtual void cmdDispatchNetwork() = 0;
+
+  virtual void cmdBuildIndirectTLAS(lvk::AccelStructHandle tlas,
+                                    lvk::BufferHandle instanceDescriptors,
+                                    uint32_t instanceCount,
+                                    lvk::BufferHandle instanceCountBuffer = {}) = 0;
 };
 
 class IMetalContext : public lvk::IContext {
@@ -192,6 +197,8 @@ class IMetalContext : public lvk::IContext {
   virtual void setShaderModuleMetadata(ShaderModuleHandle handle, const ShaderModuleMetadata& metadata) = 0;
 
   virtual void setIndirectBufferMetadata(BufferHandle indirectBuffer, const IndirectBufferMetadata& metadata) = 0;
+
+  [[nodiscard]] virtual uint32_t indirectTLASInstanceDescriptorSize() const = 0;
 };
 
 std::unique_ptr<IMetalContext> createContextWithMetalLayer(CA::MetalLayer* layer,

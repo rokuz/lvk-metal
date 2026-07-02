@@ -681,7 +681,11 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
     ImGui::Text("W/A/S/D move, 1/2 up/down, Shift fast");
     ImGui::Text("hold LMB + drag to look around");
     ImGui::Separator();
-    ImGui::Combo("Rendering", &mode_, "Full resolution\0" "Bilinear (1/2 -> 1)\0" "ML upscale (1/2 -> 1, CuNNy)\0");
+    ImGui::Combo("Rendering",
+                 &mode_,
+                 "Full resolution\0"
+                 "Bilinear (1/2 -> 1)\0"
+                 "ML upscale (1/2 -> 1, CuNNy)\0");
     ImGui::Separator();
     ImGui::Checkbox("Ray traced shadows", &enableShadows_);
     ImGui::SliderFloat3("Light dir", &lightDir_.x, -1.0f, 1.0f);
