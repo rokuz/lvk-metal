@@ -179,6 +179,16 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   if (!createQueue())
     return false;
 
+  {
+    NS::SharedPtr<MTL4::CompilerDescriptor> compilerDesc = ns::make<MTL4::CompilerDescriptor>();
+    ns::setLabel(compilerDesc.get(), "lvk-metal.compiler");
+    NS::Error* compilerError = nullptr;
+    compiler_ = NS::TransferPtr(device_->newCompiler(compilerDesc.get(), &compilerError));
+    if (!compiler_)
+      LLOGW("failed to create MTL4 compiler (machine-learning pipelines unavailable): %s",
+            compilerError ? compilerError->localizedDescription()->utf8String() : "unknown");
+  }
+
   NS::SharedPtr<MTL::ResidencySetDescriptor> rsd = ns::make<MTL::ResidencySetDescriptor>();
   ns::setLabel(rsd.get(), "lvk-metal.residency");
   NS::Error* rsError = nullptr;
@@ -1429,6 +1439,220 @@ Holder<TilePipelineHandle> MetalContext::createTileRenderPipeline(const TileRend
   return {this, tilePipelines_.create(std::move(tp))};
 }
 
+static NS::SharedPtr<MTL::TensorExtents> makeTensorExtents(const uint32_t* dims, uint32_t rank) {
+  NS::Integer values[TensorDesc::kMaxRank] = {};
+  for (uint32_t i = 0; i < rank; ++i)
+    values[i] = NS::Integer(dims[rank - 1 - i]);
+  return NS::TransferPtr(MTL::TensorExtents::alloc()->init(rank, values));
+}
+
+static NS::SharedPtr<MTL::TensorExtents> makeContiguousStrides(const uint32_t* dims, uint32_t rank) {
+  NS::Integer values[TensorDesc::kMaxRank] = {};
+  NS::Integer stride = 1;
+  for (uint32_t i = 0; i < rank; ++i) {
+    values[i] = stride;
+    stride *= NS::Integer(dims[rank - 1 - i]);
+  }
+  return NS::TransferPtr(MTL::TensorExtents::alloc()->init(rank, values));
+}
+
+Holder<TensorHandle> MetalContext::createTensor(const TensorDesc& desc, Result* outResult) {
+  if (desc.rank == 0 || desc.rank > TensorDesc::kMaxRank) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "invalid tensor rank");
+    return {};
+  }
+  const MTL::TensorDataType dataType = toMTLTensorDataType(desc.dataType);
+  NS::SharedPtr<MTL::TensorExtents> extents = makeTensorExtents(desc.dimensions, desc.rank);
+
+  const MetalBuffer* aliasBuffer = desc.buffer.empty() ? nullptr : buffers_.get(desc.buffer);
+  if (!desc.buffer.empty() && (!aliasBuffer || !aliasBuffer->buffer)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "invalid tensor alias buffer");
+    return {};
+  }
+
+  NS::SharedPtr<MTL::TensorDescriptor> td = ns::make<MTL::TensorDescriptor>();
+  td->setDataType(dataType);
+  td->setDimensions(extents.get());
+  td->setUsage(MTL::TensorUsageMachineLearning | MTL::TensorUsageCompute);
+  td->setStorageMode(aliasBuffer ? aliasBuffer->buffer->storageMode() : toMTLStorageMode(desc.storage));
+  if (aliasBuffer) {
+    const uint32_t elemSize = tensorDataTypeByteSize(dataType);
+    NS::Integer strideVals[TensorDesc::kMaxRank] = {};
+    NS::Integer stride = 1;
+    for (uint32_t i = 0; i < desc.rank; ++i) {
+      strideVals[i] = stride;
+      const uint32_t dimSize = desc.dimensions[desc.rank - 1 - i];
+      stride = (i == 0) ? NS::Integer(mlTensorRowStrideElements(dimSize, elemSize)) : stride * NS::Integer(dimSize);
+    }
+    NS::SharedPtr<MTL::TensorExtents> strides = NS::TransferPtr(MTL::TensorExtents::alloc()->init(desc.rank, strideVals));
+    td->setStrides(strides.get());
+  }
+
+  NS::Error* error = nullptr;
+  NS::SharedPtr<MTL::Tensor> tensor =
+      aliasBuffer ? NS::TransferPtr(aliasBuffer->buffer->newTensor(td.get(), desc.bufferOffset, &error))
+                  : NS::TransferPtr(device_->newTensor(td.get(), &error));
+  if (!tensor) {
+    LLOGE("createTensor failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    Result::setResult(outResult, Result::Code::RuntimeError, "newTensor failed");
+    return {};
+  }
+  ns::setLabel(tensor.get(), desc.debugName);
+
+  MetalTensor mt;
+  mt.tensor = tensor;
+  mt.dataType = dataType;
+  mt.rank = desc.rank;
+  size_t elements = 1;
+  for (uint32_t i = 0; i < desc.rank; ++i) {
+    mt.dimensions[i] = desc.dimensions[i];
+    elements *= desc.dimensions[i];
+  }
+  mt.byteSize = elements * tensorDataTypeByteSize(dataType);
+  addResident(tensor.get());
+  return {this, tensors_.create(std::move(mt))};
+}
+
+Result MetalContext::upload(TensorHandle handle, const void* data, size_t size) {
+  const MetalTensor* mt = tensors_.get(handle);
+  if (!mt || !mt->tensor)
+    return Result(Result::Code::ArgumentOutOfRange, "invalid tensor");
+  if (mt->tensor->storageMode() != MTL::StorageModeShared)
+    return Result(Result::Code::RuntimeError, "tensor upload requires StorageType_HostVisible");
+  if (size < mt->byteSize)
+    return Result(Result::Code::ArgumentOutOfRange, "upload size smaller than tensor");
+  const uint32_t zeros[TensorDesc::kMaxRank] = {};
+  NS::SharedPtr<MTL::TensorExtents> sliceOrigin = makeTensorExtents(zeros, mt->rank);
+  NS::SharedPtr<MTL::TensorExtents> sliceDims = makeTensorExtents(mt->dimensions, mt->rank);
+  NS::SharedPtr<MTL::TensorExtents> strides = makeContiguousStrides(mt->dimensions, mt->rank);
+  mt->tensor->replaceSliceOrigin(sliceOrigin.get(), sliceDims.get(), data, strides.get());
+  return Result();
+}
+
+Result MetalContext::download(TensorHandle handle, void* data, size_t size) {
+  const MetalTensor* mt = tensors_.get(handle);
+  if (!mt || !mt->tensor)
+    return Result(Result::Code::ArgumentOutOfRange, "invalid tensor");
+  if (mt->tensor->storageMode() != MTL::StorageModeShared)
+    return Result(Result::Code::RuntimeError, "tensor download requires StorageType_HostVisible");
+  if (size < mt->byteSize)
+    return Result(Result::Code::ArgumentOutOfRange, "download size smaller than tensor");
+  const uint32_t zeros[TensorDesc::kMaxRank] = {};
+  NS::SharedPtr<MTL::TensorExtents> sliceOrigin = makeTensorExtents(zeros, mt->rank);
+  NS::SharedPtr<MTL::TensorExtents> sliceDims = makeTensorExtents(mt->dimensions, mt->rank);
+  NS::SharedPtr<MTL::TensorExtents> strides = makeContiguousStrides(mt->dimensions, mt->rank);
+  mt->tensor->getBytes(data, strides.get(), sliceOrigin.get(), sliceDims.get());
+  return Result();
+}
+
+Holder<MLPipelineHandle> MetalContext::createMachineLearningPipeline(const MachineLearningPipelineDesc& desc, Result* outResult) {
+  if (!compiler_) {
+    Result::setResult(outResult, Result::Code::RuntimeError, "MTL4 compiler unavailable");
+    return {};
+  }
+  if (!desc.packagePath || !desc.packagePath[0]) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "missing ML package path");
+    return {};
+  }
+  NS::Error* error = nullptr;
+  NS::SharedPtr<MTL::Library> library =
+      NS::TransferPtr(device_->newLibrary(NS::URL::fileURLWithPath(ns::string(desc.packagePath)), &error));
+  if (!library) {
+    LLOGE("createMachineLearningPipeline: failed to load '%s': %s",
+          desc.packagePath,
+          error ? error->localizedDescription()->utf8String() : "unknown");
+    Result::setResult(outResult, Result::Code::RuntimeError, "newLibrary(package) failed");
+    return {};
+  }
+  ns::setLabel(library.get(), desc.debugName);
+
+  NS::SharedPtr<MTL4::LibraryFunctionDescriptor> fnDesc = ns::make<MTL4::LibraryFunctionDescriptor>();
+  fnDesc->setName(ns::string(desc.functionName ? desc.functionName : "main"));
+  fnDesc->setLibrary(library.get());
+
+  NS::SharedPtr<MTL4::MachineLearningPipelineDescriptor> pd = ns::make<MTL4::MachineLearningPipelineDescriptor>();
+  ns::setLabel(pd.get(), desc.debugName);
+  pd->setMachineLearningFunctionDescriptor(fnDesc.get());
+  NS::SharedPtr<MTL4::PipelineOptions> options = ns::make<MTL4::PipelineOptions>();
+  options->setShaderReflection(MTL4::ShaderReflectionBindingInfo);
+  pd->setOptions(options.get());
+  for (uint32_t i = 0; i < desc.numInputs; ++i) {
+    const MetalTensor* mt = tensors_.get(desc.inputs[i]);
+    if (!mt || !mt->tensor) {
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "invalid ML input tensor");
+      return {};
+    }
+    NS::SharedPtr<MTL::TensorExtents> extents = makeTensorExtents(mt->dimensions, mt->rank);
+    pd->setInputDimensions(extents.get(), NS::Integer(i));
+  }
+
+  NS::SharedPtr<MTL4::MachineLearningPipelineState> state =
+      NS::TransferPtr(compiler_->newMachineLearningPipelineState(pd.get(), &error));
+  if (!state) {
+    LLOGE("createMachineLearningPipeline: compile failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    Result::setResult(outResult, Result::Code::RuntimeError, "newMachineLearningPipelineState failed");
+    return {};
+  }
+
+  if (getenv("LVKM_ML_REFLECT")) {
+    if (MTL4::MachineLearningPipelineReflection* refl = state->reflection()) {
+      NS::Array* bindings = refl->bindings();
+      const NS::UInteger n = bindings ? bindings->count() : 0;
+      LLOGL("ML pipeline '%s' has %lu bindings:", desc.debugName ? desc.debugName : "", (unsigned long)n);
+      for (NS::UInteger i = 0; i < n; ++i) {
+        const MTL::Binding* b = bindings->object<MTL::Binding>(i);
+        LLOGL("  [%lu] index=%lu type=%ld name='%s'",
+              (unsigned long)i,
+              (unsigned long)b->index(),
+              (long)b->type(),
+              b->name() ? b->name()->utf8String() : "");
+      }
+    }
+  }
+
+  MetalMachineLearningPipeline mp;
+  mp.pipeline = state;
+  mp.library = library;
+  const NS::UInteger heapSize = state->intermediatesHeapSize();
+  if (heapSize > 0) {
+    NS::SharedPtr<MTL::HeapDescriptor> hd = ns::make<MTL::HeapDescriptor>();
+    hd->setType(MTL::HeapTypePlacement);
+    hd->setStorageMode(MTL::StorageModePrivate);
+    hd->setSize(heapSize);
+    mp.intermediatesHeap = NS::TransferPtr(device_->newHeap(hd.get()));
+    if (!mp.intermediatesHeap) {
+      Result::setResult(outResult, Result::Code::RuntimeError, "intermediates heap alloc failed");
+      return {};
+    }
+    ns::setLabel(mp.intermediatesHeap.get(), "lvk-metal.ml.intermediates");
+    addResident(mp.intermediatesHeap.get());
+  }
+  addResident(state.get());
+
+  NS::SharedPtr<MTL4::ArgumentTableDescriptor> atd = ns::make<MTL4::ArgumentTableDescriptor>();
+  ns::setLabel(atd.get(), desc.debugName);
+  atd->setMaxBufferBindCount(desc.numInputs + desc.numOutputs);
+  mp.argTable = NS::TransferPtr(device_->newArgumentTable(atd.get(), &error));
+  if (!mp.argTable) {
+    LLOGE("createMachineLearningPipeline: argument table failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    Result::setResult(outResult, Result::Code::RuntimeError, "newArgumentTable failed");
+    return {};
+  }
+  for (uint32_t i = 0; i < desc.numInputs; ++i) {
+    if (const MetalTensor* mt = tensors_.get(desc.inputs[i]))
+      mp.argTable->setResource(mt->tensor->gpuResourceID(), i);
+  }
+  for (uint32_t i = 0; i < desc.numOutputs; ++i) {
+    const MetalTensor* mt = tensors_.get(desc.outputs[i]);
+    if (!mt || !mt->tensor) {
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "invalid ML output tensor");
+      return {};
+    }
+    mp.argTable->setResource(mt->tensor->gpuResourceID(), desc.numInputs + i);
+  }
+  return {this, mlPipelines_.create(std::move(mp))};
+}
+
 Holder<ArgumentTableHandle> MetalContext::createArgumentTable(const ArgumentTableDesc& desc, Result* outResult) {
   NS::SharedPtr<MTL4::ArgumentTableDescriptor> td = ns::make<MTL4::ArgumentTableDescriptor>();
   ns::setLabel(td.get(), desc.debugName);
@@ -1771,6 +1995,29 @@ void MetalContext::destroy(TilePipelineHandle handle) {
   deferredTask([this, handle]() { tilePipelines_.destroy(handle); });
 }
 
+void MetalContext::destroy(TensorHandle handle) {
+  if (!tensors_.get(handle))
+    return;
+  deferredTask([this, handle]() {
+    if (const MetalTensor* mt = tensors_.get(handle))
+      removeResident(mt->tensor.get());
+    tensors_.destroy(handle);
+  });
+}
+
+void MetalContext::destroy(MLPipelineHandle handle) {
+  if (!mlPipelines_.get(handle))
+    return;
+  deferredTask([this, handle]() {
+    if (const MetalMachineLearningPipeline* mp = mlPipelines_.get(handle)) {
+      removeResident(mp->pipeline.get());
+      if (mp->intermediatesHeap)
+        removeResident(mp->intermediatesHeap.get());
+    }
+    mlPipelines_.destroy(handle);
+  });
+}
+
 bool MetalContext::startGpuCapture(const char* outputPath) {
   MTL::CaptureManager* mgr = MTL::CaptureManager::sharedCaptureManager();
   if (outputPath && !mgr->supportsDestination(MTL::CaptureDestinationGPUTraceDocument)) {
@@ -2038,7 +2285,9 @@ void MetalContext::recreateSwapchain(int newWidth, int newHeight) {
 void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
                                       const lvk::Framebuffer& framebuffer,
                                       const lvk::Dependencies& deps) {
+  endMachineLearningEncoder();
   endComputeEncoder();
+  pendingMLBarrier_ = false;
   ctx_->encodeIndirectDraws(deps);
 
   NS::SharedPtr<MTL4::RenderPassDescriptor> rpd = ns::make<MTL4::RenderPassDescriptor>();
@@ -2182,8 +2431,17 @@ void CommandBuffer::endComputeEncoder() {
   }
 }
 
+void CommandBuffer::endMachineLearningEncoder() {
+  if (mlEncoder_) {
+    mlEncoder_->endEncoding();
+    mlEncoder_ = nullptr;
+  }
+  mlPipeline_ = nullptr;
+}
+
 MTL4::ComputeCommandEncoder* CommandBuffer::beginTransferEncoder() {
   LVK_ASSERT_MSG(!isRendering_, "transfer commands must be recorded outside cmdBeginRendering()/cmdEndRendering()");
+  endMachineLearningEncoder();
   endComputeEncoder();
   return ctx_->commandBuffer()->computeCommandEncoder();
 }
@@ -2305,7 +2563,9 @@ void CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instanc
 }
 
 void CommandBuffer::setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table) {
-  if (computeEncoder_) {
+  if (mlEncoder_) {
+    mlEncoder_->setArgumentTable(table);
+  } else if (computeEncoder_) {
     computeEncoder_->setArgumentTable(table);
   } else if (encoder_) {
     const MTL::RenderStages stages =
@@ -2324,6 +2584,11 @@ void CommandBuffer::cmdBindComputePipeline(ComputePipelineHandle handle) {
   if (!computeEncoder_) {
     computeEncoder_ = ctx_->commandBuffer()->computeCommandEncoder();
     bindArgumentTableInternal(ctx_->defaultArgumentTable());
+    if (pendingMLBarrier_) {
+      computeEncoder_->barrierAfterQueueStages(
+          MTL::StageMachineLearning, MTL::StageDispatch | MTL::StageBlit, MTL4::VisibilityOptionDevice);
+      pendingMLBarrier_ = false;
+    }
   }
   computeEncoder_->setComputePipelineState(p->pipeline.get());
   computeThreadgroupSize_ = p->threadgroupSize;
@@ -2400,6 +2665,31 @@ void CommandBuffer::cmdBindTilePipeline(TilePipelineHandle handle) {
 void CommandBuffer::cmdDispatchTile() {
   LVK_ASSERT_MSG(isRendering_, "cmdDispatchTile() must be recorded inside cmdBeginRendering()/cmdEndRendering()");
   encoder_->dispatchThreadsPerTile(MTL::Size(encoder_->tileWidth(), encoder_->tileHeight(), 1));
+}
+
+void CommandBuffer::cmdBindMachineLearningPipeline(MLPipelineHandle handle) {
+  LVK_ASSERT_MSG(!isRendering_, "cmdBindMachineLearningPipeline() must be recorded outside cmdBeginRendering()/cmdEndRendering()");
+  const MetalMachineLearningPipeline* p = ctx_->getMachineLearningPipeline(handle);
+  LVK_ASSERT(p && p->pipeline);
+  if (!p || !p->pipeline)
+    return;
+  endComputeEncoder();
+  if (!mlEncoder_)
+    mlEncoder_ = ctx_->commandBuffer()->machineLearningCommandEncoder();
+  mlEncoder_->setPipelineState(p->pipeline.get());
+  if (p->argTable)
+    mlEncoder_->setArgumentTable(p->argTable.get());
+  mlPipeline_ = p;
+}
+
+void CommandBuffer::cmdDispatchNetwork() {
+  if (!mlEncoder_ || !mlPipeline_)
+    return;
+  mlEncoder_->barrierAfterQueueStages(
+      MTL::StageDispatch | MTL::StageBlit, MTL::StageMachineLearning, MTL4::VisibilityOptionDevice);
+  mlEncoder_->dispatchNetwork(mlPipeline_->intermediatesHeap.get());
+  endMachineLearningEncoder();
+  pendingMLBarrier_ = true;
 }
 
 void CommandBuffer::cmdBindViewport(const Viewport& viewport) {
@@ -2703,6 +2993,16 @@ void destroy(lvk::IContext* ctx, lvk::metal::ArgumentTableHandle handle) {
 }
 
 void destroy(lvk::IContext* ctx, lvk::metal::TilePipelineHandle handle) {
+  if (ctx)
+    static_cast<lvk::metal::IMetalContext*>(ctx)->destroy(handle);
+}
+
+void destroy(lvk::IContext* ctx, lvk::metal::TensorHandle handle) {
+  if (ctx)
+    static_cast<lvk::metal::IMetalContext*>(ctx)->destroy(handle);
+}
+
+void destroy(lvk::IContext* ctx, lvk::metal::MLPipelineHandle handle) {
   if (ctx)
     static_cast<lvk::metal::IMetalContext*>(ctx)->destroy(handle);
 }

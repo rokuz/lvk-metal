@@ -86,6 +86,21 @@ struct MetalComputePipeline {
   MTL::Size threadgroupSize = MTL::Size(16, 16, 1);
 };
 
+struct MetalTensor {
+  NS::SharedPtr<MTL::Tensor> tensor;
+  MTL::TensorDataType dataType = MTL::TensorDataTypeFloat16;
+  uint32_t dimensions[TensorDesc::kMaxRank] = {};
+  uint32_t rank = 0;
+  size_t byteSize = 0;
+};
+
+struct MetalMachineLearningPipeline {
+  NS::SharedPtr<MTL4::MachineLearningPipelineState> pipeline;
+  NS::SharedPtr<MTL::Heap> intermediatesHeap;
+  NS::SharedPtr<MTL::Library> library;
+  NS::SharedPtr<MTL4::ArgumentTable> argTable;
+};
+
 struct MetalArgumentTable {
   NS::SharedPtr<MTL4::ArgumentTable> table;
   uint32_t constantsIndex = UINT32_MAX;
@@ -225,6 +240,9 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdBindTilePipeline(TilePipelineHandle pipeline) override;
   void cmdDispatchTile() override;
 
+  void cmdBindMachineLearningPipeline(MLPipelineHandle pipeline) override;
+  void cmdDispatchNetwork() override;
+
  protected:
   MetalContext* context() const {
     return ctx_;
@@ -235,12 +253,16 @@ class CommandBuffer : public IMetalCommandBuffer {
   void resetArgumentTableIfOverridden();
   void setArgumentTableOnActiveEncoder(MTL4::ArgumentTable* table);
   void endComputeEncoder();
+  void endMachineLearningEncoder();
   MTL4::ComputeCommandEncoder* beginTransferEncoder();
   void applyDepthStencilState();
 
   MetalContext* ctx_ = nullptr;
   MTL4::RenderCommandEncoder* encoder_ = nullptr;
   MTL4::ComputeCommandEncoder* computeEncoder_ = nullptr;
+  MTL4::MachineLearningCommandEncoder* mlEncoder_ = nullptr;
+  const MetalMachineLearningPipeline* mlPipeline_ = nullptr;
+  bool pendingMLBarrier_ = false;
   MTL::Size computeThreadgroupSize_ = MTL::Size(16, 16, 1);
   MTL::Size meshObjectThreadsPerThreadgroup_ = MTL::Size(1, 1, 1);
   MTL::Size meshThreadsPerThreadgroup_ = MTL::Size(1, 1, 1);
@@ -317,6 +339,9 @@ class MetalContext : public IMetalContext {
   Holder<ComputePipelineHandle> createComputePipeline(const ComputePipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
   Holder<TilePipelineHandle> createTileRenderPipeline(const TileRenderPipelineDesc& desc, Result* outResult = nullptr) override;
+  Holder<TensorHandle> createTensor(const TensorDesc& desc, Result* outResult = nullptr) override;
+  Holder<MLPipelineHandle> createMachineLearningPipeline(const MachineLearningPipelineDesc& desc,
+                                                                      Result* outResult = nullptr) override;
   Holder<ShaderModuleHandle> createShaderModule(const ShaderModuleDesc& desc, Result* outResult = nullptr) override;
   Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult = nullptr) override;
   Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult = nullptr) override;
@@ -339,6 +364,8 @@ class MetalContext : public IMetalContext {
   void destroy(Framebuffer& fb) override {}
   void destroy(ArgumentTableHandle handle) override;
   void destroy(TilePipelineHandle handle) override;
+  void destroy(TensorHandle handle) override;
+  void destroy(MLPipelineHandle handle) override;
 
   uint64_t gpuAddress(AccelStructHandle handle) const override;
   AccelStructSizes getAccelStructSizes(const AccelStructDesc& desc, Result* outResult = nullptr) const override;
@@ -353,6 +380,9 @@ class MetalContext : public IMetalContext {
 
   Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override;
   Result download(TextureHandle handle, const TextureRangeDesc& range, void* outData) override;
+
+  Result upload(TensorHandle handle, const void* data, size_t size) override;
+  Result download(TensorHandle handle, void* data, size_t size) override;
   Dimensions getDimensions(TextureHandle handle) const override;
   float getAspectRatio(TextureHandle handle) const override;
   Format getFormat(TextureHandle handle) const override;
@@ -407,6 +437,12 @@ class MetalContext : public IMetalContext {
   const MetalTilePipeline* getTilePipeline(TilePipelineHandle handle) const {
     return tilePipelines_.get(handle);
   }
+  const MetalTensor* getTensor(TensorHandle handle) const {
+    return tensors_.get(handle);
+  }
+  const MetalMachineLearningPipeline* getMachineLearningPipeline(MLPipelineHandle handle) const {
+    return mlPipelines_.get(handle);
+  }
   const MetalAccelStruct* getAccelStruct(AccelStructHandle handle) const {
     return accelStructs_.get(handle);
   }
@@ -453,6 +489,7 @@ class MetalContext : public IMetalContext {
 
   NS::SharedPtr<MTL::Device> device_;
   NS::SharedPtr<MTL4::CommandQueue> commandQueue_;
+  NS::SharedPtr<MTL4::Compiler> compiler_;
   NS::SharedPtr<MTL::ResidencySet> residencySet_;
   bool residencyDirty_ = false;
   std::unique_ptr<MetalImmediateCommands> immediate_;
@@ -530,6 +567,8 @@ class MetalContext : public IMetalContext {
   ldr::Pool<lvk::ComputePipeline, MetalComputePipeline> computePipelines_;
   ldr::Pool<lvk::metal::ArgumentTable, MetalArgumentTable> argumentTables_;
   ldr::Pool<lvk::metal::TilePipeline, MetalTilePipeline> tilePipelines_;
+  ldr::Pool<lvk::metal::Tensor, MetalTensor> tensors_;
+  ldr::Pool<lvk::metal::MLPipeline, MetalMachineLearningPipeline> mlPipelines_;
   ldr::Pool<lvk::AccelerationStructure, MetalAccelStruct> accelStructs_;
   ldr::Pool<lvk::QueryPool, MetalQueryPool> queryPools_;
 

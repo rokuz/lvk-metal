@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Package Version</key>
+	<dict>
+		<key>6.3.9</key>
+		<dict>
+			<key>Adapters by rank</key>
+			<dict/>
+			<key>Binary File Resources</key>
+			<dict/>
+			<key>Callables</key>
+			<dict/>
+			<key>Data File Names</key>
+			<array/>
+			<key>Optimized Modules</key>
+			<dict/>
+			<key>Optimized No Device Modules</key>
+			<dict/>
+			<key>Optimized No Device Resources Used</key>
+			<dict/>
+			<key>Optimized Resources Used</key>
+			<dict/>
+			<key>Original</key>
+			<string>model_0.mpsgraph</string>
+			<key>Original Resources Used</key>
+			<array>
+				<string>tmp_16</string>
+				<string>tmp_4</string>
+				<string>tmp_15</string>
+				<string>tmp_2</string>
+				<string>tmp_9</string>
+				<string>tmp_14</string>
+				<string>tmp_7</string>
+				<string>tmp_13</string>
+				<string>tmp_5</string>
+				<string>tmp_12</string>
+				<string>tmp_3</string>
+				<string>tmp_11</string>
+				<string>tmp_8</string>
+				<string>tmp</string>
+				<string>tmp_1</string>
+				<string>tmp_10</string>
+				<string>tmp_6</string>
+			</array>
+			<key>RDFFMap</key>
+			<dict/>
+			<key>Resource Offsets</key>
+			<dict>
+				<key>tmp</key>
+				<integer>445101</integer>
+				<key>tmp_1</key>
+				<integer>470836</integer>
+				<key>tmp_10</key>
+				<integer>471223</integer>
+				<key>tmp_11</key>
+				<integer>370982</integer>
+				<key>tmp_12</key>
+				<integer>296863</integer>
+				<key>tmp_13</key>
+				<integer>296089</integer>
+				<key>tmp_14</key>
+				<integer>221583</integer>
+				<key>tmp_15</key>
+				<integer>73732</integer>
+				<key>tmp_16</key>
+				<integer>469297</integer>
+				<key>tmp_2</key>
+				<integer>147851</integer>
+				<key>tmp_3</key>
+				<integer>370595</integer>
+				<key>tmp_4</key>
+				<integer>74119</integer>
+				<key>tmp_5</key>
+				<integer>296476</integer>
+				<key>tmp_6</key>
+				<integer>0</integer>
+				<key>tmp_7</key>
+				<integer>295702</integer>
+				<key>tmp_8</key>
+				<integer>371369</integer>
+				<key>tmp_9</key>
+				<integer>295315</integer>
+			</dict>
+			<key>Resource Storage Mode</key>
+			<integer>1</integer>
+		</dict>
+	</dict>
+</dict>
+</plist>

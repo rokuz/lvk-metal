@@ -1,6 +1,7 @@
 #pragma once
 
 #include <lvk/LVK.h>
+#include <lvk/LVK-Metal.h>
 
 #include <Metal/Metal.hpp>
 
@@ -26,6 +27,43 @@ inline uint32_t bytesPerMetalPixel(MTL::PixelFormat fmt) {
     return 8;
   case MTL::PixelFormatRGBA32Float:
     return 16;
+  default:
+    return 4;
+  }
+}
+
+inline MTL::TensorDataType toMTLTensorDataType(TensorDataType dataType) {
+  switch (dataType) {
+  case TensorDataType::Float16:
+    return MTL::TensorDataTypeFloat16;
+  case TensorDataType::Float32:
+    return MTL::TensorDataTypeFloat32;
+  case TensorDataType::BFloat16:
+    return MTL::TensorDataTypeBFloat16;
+  case TensorDataType::Int8:
+    return MTL::TensorDataTypeInt8;
+  case TensorDataType::UInt8:
+    return MTL::TensorDataTypeUInt8;
+  case TensorDataType::Int32:
+    return MTL::TensorDataTypeInt32;
+  }
+  return MTL::TensorDataTypeFloat16;
+}
+
+inline uint32_t tensorDataTypeByteSize(MTL::TensorDataType dataType) {
+  switch (dataType) {
+  case MTL::TensorDataTypeInt8:
+  case MTL::TensorDataTypeUInt8:
+    return 1;
+  case MTL::TensorDataTypeFloat16:
+  case MTL::TensorDataTypeBFloat16:
+  case MTL::TensorDataTypeInt16:
+  case MTL::TensorDataTypeUInt16:
+    return 2;
+  case MTL::TensorDataTypeFloat32:
+  case MTL::TensorDataTypeInt32:
+  case MTL::TensorDataTypeUInt32:
+    return 4;
   default:
     return 4;
   }

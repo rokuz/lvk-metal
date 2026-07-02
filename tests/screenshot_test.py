@@ -26,6 +26,7 @@ SAMPLES = [
     ("OmniShadows", "samples/OmniShadows/OmniShadows", 60),
     ("LocalRead", "samples/LocalRead/LocalRead", 60),
     ("LocalReadTile", "samples/LocalReadTile/LocalReadTile", 60),
+    ("MachineLearning", "samples/MachineLearning/MachineLearning", 47),
     ("SolarSystem", "samples/SolarSystem/SolarSystem", 120),
     ("ImGuiDemo", "samples/ImGuiDemo/ImGuiDemo", 1),
     ("Bistro", "samples/Bistro/Bistro", 30),
