@@ -20,6 +20,8 @@ static const char* kImGuiMSL = R"(
 #include <metal_stdlib>
 using namespace metal;
 
+constant bool kNonLinearColorSpace [[function_constant(0)]];
+
 struct ImVtx {
   float x;
   float y;
@@ -60,11 +62,24 @@ vertex ImOut imguiVertexMain(uint vid [[vertex_id]], constant ImPush& pc [[buffe
 }
 
 fragment float4 imguiFragmentMain(ImOut in [[stage_in]], constant ImPush& pc [[buffer(0)]], LVK_BINDLESS_ARGS) {
-  return in.color * textureBindless2D(pc.textureId, pc.samplerId, in.uv);
+  const float4 c = in.color * textureBindless2D(pc.textureId, pc.samplerId, in.uv);
+  return kNonLinearColorSpace ? float4(pow(c.rgb, float3(2.2)), c.a) : c;
 }
 )";
 
 namespace lvk::metal {
+
+static bool isSrgbFormat(lvk::Format format) {
+  switch (format) {
+  case lvk::Format_RGBA_SRGB8:
+  case lvk::Format_BGRA_SRGB8:
+  case lvk::Format_ETC2_SRGB8:
+  case lvk::Format_BC7_SRGBA:
+    return true;
+  default:
+    return false;
+  }
+}
 
 ImGuiRenderer::ImGuiRenderer(lvk::IContext& ctx, GLFWwindow* window, const char* defaultFontTTF, float fontSizePixels)
 : ImGuiRenderer(ctx, window, nullptr, 0, fontSizePixels) {
@@ -136,9 +151,15 @@ void ImGuiRenderer::updateFont(const char* defaultFontTTF, const void* fontData,
 }
 
 lvk::Holder<lvk::RenderPipelineHandle> ImGuiRenderer::createNewPipelineState(const lvk::Framebuffer& desc) {
+  const bool nonLinearColorSpace = isSrgbFormat(ctx_.getFormat(desc.color[0].texture));
+  lvk::SpecializationConstantDesc spec = {};
+  spec.entries[0] = {.constantId = 0, .offset = 0, .size = sizeof(nonLinearColorSpace)};
+  spec.data = &nonLinearColorSpace;
+  spec.dataSize = sizeof(nonLinearColorSpace);
   return ctx_.createRenderPipeline({
       .smVert = vert_,
       .smFrag = frag_,
+      .specInfo = spec,
       .color = {{
           .format = ctx_.getFormat(desc.color[0].texture),
           .blendEnabled = true,
