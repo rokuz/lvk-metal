@@ -2979,12 +2979,39 @@ void MetalValidatedCommandBuffer::cmdPushConstants(const void* data, size_t size
 void MetalValidatedCommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
                                                     const lvk::Framebuffer& desc,
                                                     const Dependencies& deps) {
-  const uint32_t maxColor = context()->limits().maxColorRenderTargetsPerRenderPass;
+  const GpuLimits& limits = context()->limits();
+  const uint32_t maxColor = limits.maxColorRenderTargetsPerRenderPass;
   if (desc.getNumColorAttachments() > maxColor) {
     LLOGW(
         "validation: cmdBeginRendering uses %u color attachments but the GPU supports at most %u", desc.getNumColorAttachments(), maxColor);
   }
+  const uint32_t viewCount = renderPass.viewMask ? uint32_t(__builtin_popcount(renderPass.viewMask)) : 1;
+  if (viewCount > limits.maxVertexCountForVertexAmplification) {
+    LLOGW("validation: cmdBeginRendering uses %u views (viewMask) but vertex amplification supports at most %u",
+          viewCount,
+          limits.maxVertexCountForVertexAmplification);
+  }
   CommandBuffer::cmdBeginRendering(renderPass, desc, deps);
+}
+
+static void validateSampleCount(uint32_t samples, uint32_t maxSamples, const char* fn) {
+  if (samples > maxSamples)
+    LLOGW("validation: %s uses %u samples but the GPU supports at most %u", fn, samples, maxSamples);
+  else if (samples && (samples & (samples - 1)))
+    LLOGW("validation: %s sample count %u is not a power of two", fn, samples);
+}
+
+static void validateThreadgroupSize(const MTL::Size& tg, uint32_t maxThreads, const char* fn, const char* stage) {
+  const uint64_t threads = uint64_t(tg.width) * uint64_t(tg.height) * uint64_t(tg.depth);
+  if (threads > maxThreads)
+    LLOGW("validation: %s %s threadgroup is %lux%lux%lu = %llu threads but the GPU max is %u",
+          fn,
+          stage,
+          (unsigned long)tg.width,
+          (unsigned long)tg.height,
+          (unsigned long)tg.depth,
+          (unsigned long long)threads,
+          maxThreads);
 }
 
 static void validateIndirectRange(const MetalBuffer* b, size_t offset, uint32_t drawCount, uint32_t stride, const char* fn) {
@@ -3105,6 +3132,7 @@ Holder<TextureHandle> MetalValidatedContext::createTexture(const TextureDesc& de
           desc.numLayers,
           limits().maxLayersPerTextureArray);
   }
+  validateSampleCount(desc.numSamples ? desc.numSamples : 1, limits().maxSampleCountWithMsaa, "createTexture");
   return MetalContext::createTexture(desc, debugName, outResult);
 }
 
@@ -3114,7 +3142,39 @@ Holder<RenderPipelineHandle> MetalValidatedContext::createRenderPipeline(const R
           desc.getNumColorAttachments(),
           limits().maxColorRenderTargetsPerRenderPass);
   }
-  return MetalContext::createRenderPipeline(desc, outResult);
+  validateSampleCount(desc.samplesCount ? desc.samplesCount : 1, limits().maxSampleCountWithMsaa, "createRenderPipeline");
+  Holder<RenderPipelineHandle> handle = MetalContext::createRenderPipeline(desc, outResult);
+  if (const MetalRenderPipeline* rp = handle.valid() ? getRenderPipeline(handle) : nullptr; rp && rp->isMesh) {
+    validateThreadgroupSize(rp->objectThreadsPerThreadgroup, limits().maxThreadsPerThreadgroup, "createRenderPipeline", "object");
+    validateThreadgroupSize(rp->meshThreadsPerThreadgroup, limits().maxThreadsPerThreadgroup, "createRenderPipeline", "mesh");
+  }
+  return handle;
+}
+
+Holder<ComputePipelineHandle> MetalValidatedContext::createComputePipeline(const ComputePipelineDesc& desc, Result* outResult) {
+  Holder<ComputePipelineHandle> handle = MetalContext::createComputePipeline(desc, outResult);
+  if (const MetalComputePipeline* cp = handle.valid() ? getComputePipeline(handle) : nullptr; cp) {
+    validateThreadgroupSize(cp->threadgroupSize, limits().maxThreadsPerThreadgroup, "createComputePipeline", "compute");
+  }
+  return handle;
+}
+
+Holder<TilePipelineHandle> MetalValidatedContext::createTileRenderPipeline(const TileRenderPipelineDesc& desc, Result* outResult) {
+  if (desc.maxThreadsPerThreadgroup > limits().maxThreadsPerThreadgroup) {
+    LLOGW("validation: createTileRenderPipeline maxThreadsPerThreadgroup %u exceeds the GPU max %u",
+          desc.maxThreadsPerThreadgroup,
+          limits().maxThreadsPerThreadgroup);
+  }
+  return MetalContext::createTileRenderPipeline(desc, outResult);
+}
+
+Holder<QueryPoolHandle> MetalValidatedContext::createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult) {
+  if (numQueries > limits().maxCounterSampleBufferLength) {
+    LLOGW("validation: createQueryPool numQueries %u exceeds the GPU max counter sample buffer length %u",
+          numQueries,
+          limits().maxCounterSampleBufferLength);
+  }
+  return MetalContext::createQueryPool(numQueries, debugName, outResult);
 }
 
 } // namespace lvk::metal

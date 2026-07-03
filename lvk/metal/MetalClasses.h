@@ -633,6 +633,9 @@ class MetalValidatedContext final : public MetalContext {
 
   Holder<TextureHandle> createTexture(const TextureDesc& desc, const char* debugName = nullptr, Result* outResult = nullptr) override;
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
+  Holder<ComputePipelineHandle> createComputePipeline(const ComputePipelineDesc& desc, Result* outResult = nullptr) override;
+  Holder<TilePipelineHandle> createTileRenderPipeline(const TileRenderPipelineDesc& desc, Result* outResult = nullptr) override;
+  Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult = nullptr) override;
 
  protected:
   CommandBuffer* createCommandBuffer() override {
