@@ -482,6 +482,11 @@ class MetalContext : public IMetalContext {
 
  protected:
   const MetalImmediateCommands::CommandBufferWrapper* beginCommandBuffer();
+  virtual CommandBuffer* createCommandBuffer() {
+    return new CommandBuffer(this);
+  }
+
+  CommandBuffer* commandBuffers_[MetalImmediateCommands::kMaxCommandBuffers] = {};
 
  private:
   bool ensureIndirectEncoder();
@@ -628,6 +633,11 @@ class MetalValidatedContext final : public MetalContext {
 
   Holder<TextureHandle> createTexture(const TextureDesc& desc, const char* debugName = nullptr, Result* outResult = nullptr) override;
   Holder<RenderPipelineHandle> createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult = nullptr) override;
+
+ protected:
+  CommandBuffer* createCommandBuffer() override {
+    return new MetalValidatedCommandBuffer(this);
+  }
 };
 
 } // namespace lvk::metal

@@ -20,8 +20,9 @@ MetalImmediateCommands::MetalImmediateCommands(MTL::Device* device, MTL4::Comman
   event_ = NS::TransferPtr(device_->newSharedEvent());
   event_->setSignaledValue(0);
   ns::setLabel(event_.get(), debugName);
-  for (uint32_t i = 0; i < kMaxCommandBuffers; ++i)
+  for (uint32_t i = 0; i < kMaxCommandBuffers; ++i) {
     buffers_[i].bufferIndex = i;
+  }
 }
 
 MetalImmediateCommands::~MetalImmediateCommands() {

@@ -110,6 +110,8 @@ MetalContext::~MetalContext() {
   if (immediate_)
     immediate_->waitAll();
   waitDeferredTasks();
+  for (CommandBuffer* cb : commandBuffers_)
+    delete cb;
   if (MetalImage* img = swapchainTextureHandle_.empty() ? nullptr : textures_.get(swapchainTextureHandle_); img && img->drawable) {
     img->drawable->release();
     img->drawable = nullptr;
@@ -232,6 +234,9 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   swap.width = width_;
   swap.height = height_;
   swapchainTextureHandle_ = textures_.create(std::move(swap));
+
+  for (CommandBuffer*& cb : commandBuffers_)
+    cb = createCommandBuffer();
 
   LLOGL("Metal device: %s\n", device_->name()->utf8String());
   return true;
@@ -552,8 +557,10 @@ const MetalImmediateCommands::CommandBufferWrapper* MetalContext::beginCommandBu
 }
 
 IMetalCommandBuffer& MetalContext::acquireMetalCommandBuffer(bool) {
-  CommandBuffer* cmd = new CommandBuffer(this);
-  cmd->wrapper_ = beginCommandBuffer();
+  const MetalImmediateCommands::CommandBufferWrapper* wrapper = beginCommandBuffer();
+  CommandBuffer* cmd = commandBuffers_[wrapper->bufferIndex];
+  *cmd = CommandBuffer(this);
+  cmd->wrapper_ = wrapper;
   return *cmd;
 }
 
@@ -584,7 +591,6 @@ SubmitHandle MetalContext::submit(lvk::ICommandBuffer& commandBuffer, TextureHan
 
   autoreleasePool_->release();
   autoreleasePool_ = nullptr;
-  delete &cmd;
 
   for (DeferredTask& t : deferredTasks_) {
     if (t.handle_.empty())
@@ -3067,8 +3073,10 @@ void MetalValidatedCommandBuffer::cmdBuildIndirectTLAS(lvk::AccelStructHandle tl
 }
 
 IMetalCommandBuffer& MetalValidatedContext::acquireMetalCommandBuffer(bool) {
-  MetalValidatedCommandBuffer* cmd = new MetalValidatedCommandBuffer(this);
-  cmd->wrapper_ = beginCommandBuffer();
+  const MetalImmediateCommands::CommandBufferWrapper* wrapper = beginCommandBuffer();
+  MetalValidatedCommandBuffer* cmd = static_cast<MetalValidatedCommandBuffer*>(commandBuffers_[wrapper->bufferIndex]);
+  *cmd = MetalValidatedCommandBuffer(this);
+  cmd->wrapper_ = wrapper;
   return *cmd;
 }
 
