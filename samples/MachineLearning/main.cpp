@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -90,7 +91,6 @@ kernel void composite(uint tid [[thread_position_in_grid]], constant CompositeCo
   for (uint s = 0; s < pc.ns; ++s) {
     device const float* o = base + s * pc.rowStride;
     const float sigma = max(o[3], 0.0) + log(1.0 + exp(-abs(o[3])));
-    const float z0 = pc.nearPlane + (pc.farPlane - pc.nearPlane) * float(s) / float(pc.ns - 1);
     float dist = 1e10;
     if (s + 1 < pc.ns)
       dist = (pc.farPlane - pc.nearPlane) / float(pc.ns - 1);
@@ -209,24 +209,28 @@ class MachineLearning final : public lvk::metal::ISample {
     inputRowStride_ = lvk::metal::mlTensorRowStrideElements(encDim, sizeof(float));
     outputRowStride_ = lvk::metal::mlTensorRowStrideElements(4, sizeof(float));
 
-    inputBuffer_ = ctx.createBuffer({
-        .usage = lvk::BufferUsageBits_Storage,
-        .storage = lvk::StorageType_Device,
-        .size = size_t(numPts) * inputRowStride_ * sizeof(float),
-        .debugName = "nerf.input.buffer",
-    });
+    inputBuffer_.resize(ctx.getNumSwapchainImages());
+    input_.resize(inputBuffer_.size());
+    for (uint32_t i = 0; i < inputBuffer_.size(); ++i) {
+      inputBuffer_[i] = ctx.createBuffer({
+          .usage = lvk::BufferUsageBits_Storage,
+          .storage = lvk::StorageType_Device,
+          .size = size_t(numPts) * inputRowStride_ * sizeof(float),
+          .debugName = "nerf.input.buffer",
+      });
+      input_[i] = ctx.createTensor({
+          .dataType = lvk::metal::TensorDataType::Float32,
+          .dimensions = {numPts, encDim},
+          .rank = 2,
+          .buffer = inputBuffer_[i],
+          .debugName = "nerf.input",
+      });
+    }
     outputBuffer_ = ctx.createBuffer({
         .usage = lvk::BufferUsageBits_Storage,
         .storage = lvk::StorageType_Device,
         .size = size_t(numPts) * outputRowStride_ * sizeof(float),
         .debugName = "nerf.output.buffer",
-    });
-    input_ = ctx.createTensor({
-        .dataType = lvk::metal::TensorDataType::Float32,
-        .dimensions = {numPts, encDim},
-        .rank = 2,
-        .buffer = inputBuffer_,
-        .debugName = "nerf.input",
     });
     output_ = ctx.createTensor({
         .dataType = lvk::metal::TensorDataType::Float32,
@@ -242,7 +246,7 @@ class MachineLearning final : public lvk::metal::ISample {
         {
             .packagePath = pkgPath.c_str(),
             .functionName = "main",
-            .inputs = {input_},
+            .inputs = {input_[0]},
             .numInputs = 1,
             .outputs = {output_},
             .numOutputs = 1,
@@ -274,7 +278,7 @@ class MachineLearning final : public lvk::metal::ISample {
     present_ = ctx.createRenderPipeline({
         .smVert = vert,
         .smFrag = frag,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .color = {{.format = ctx.getSwapchainFormat()}},
         .debugName = "nerf.present",
     });
     ready_ = true;
@@ -293,6 +297,7 @@ class MachineLearning final : public lvk::metal::ISample {
       return;
     }
     lvk::metal::IMetalCommandBuffer& mcmd = static_cast<lvk::metal::IMetalCommandBuffer&>(cmd);
+    const uint32_t r = frameId_++ % uint32_t(inputBuffer_.size());
 
     const uint32_t numPts = kRes * kRes * kSamples;
     const uint32_t numRays = kRes * kRes;
@@ -306,7 +311,7 @@ class MachineLearning final : public lvk::metal::ISample {
     const glm::vec3 origin = correction * glm::vec3(c2w[3]);
 
     EncodeConstants enc = {
-        .input = ctx_->gpuAddress(inputBuffer_),
+        .input = ctx_->gpuAddress(inputBuffer_[r]),
         .res = kRes,
         .ns = kSamples,
         .encDim = params_.encDim,
@@ -322,7 +327,8 @@ class MachineLearning final : public lvk::metal::ISample {
     cmd.cmdPushConstants(enc);
     cmd.cmdDispatch({(numPts + 63) / 64, 1, 1});
 
-    mcmd.cmdBindMachineLearningPipeline(pipeline_);
+    const lvk::metal::TensorHandle inputTensor = input_[r];
+    mcmd.cmdBindMachineLearningPipeline(pipeline_, &inputTensor, 1);
     mcmd.cmdDispatchNetwork();
 
     const CompositeConstants cc = {
@@ -363,10 +369,11 @@ class MachineLearning final : public lvk::metal::ISample {
   uint32_t inputRowStride_ = 0;
   uint32_t outputRowStride_ = 0;
   lvk::Holder<lvk::metal::MLPipelineHandle> pipeline_;
-  lvk::Holder<lvk::BufferHandle> inputBuffer_;
+  std::vector<lvk::Holder<lvk::BufferHandle>> inputBuffer_;
   lvk::Holder<lvk::BufferHandle> outputBuffer_;
-  lvk::Holder<lvk::metal::TensorHandle> input_;
+  std::vector<lvk::Holder<lvk::metal::TensorHandle>> input_;
   lvk::Holder<lvk::metal::TensorHandle> output_;
+  uint32_t frameId_ = 0;
   lvk::Holder<lvk::TextureHandle> image_;
   lvk::Holder<lvk::SamplerHandle> sampler_;
   lvk::Holder<lvk::ComputePipelineHandle> raygenPipeline_;

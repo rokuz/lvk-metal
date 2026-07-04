@@ -45,6 +45,7 @@ struct PushConstants {
   device const PerFrame* perFrame;
   device const Vertex* vb;
   uint texture;
+  uint sampler;
 };
 
 struct VertexOut {
@@ -94,7 +95,7 @@ void meshMain(FireworksMesh outMesh,
 }
 
 fragment float4 fragmentMain(VertexOut in [[stage_in]], constant PushConstants& pc [[buffer(0)]], LVK_BINDLESS_ARGS) {
-  const float alpha = textureBindless2D(pc.texture, 0, in.uv).r;
+  const float alpha = textureBindless2D(pc.texture, pc.sampler, in.uv).r;
   return float4(in.color, alpha);
 }
 )MSL";
@@ -720,6 +721,7 @@ class MeshShaderFireworks final : public lvk::metal::ISample {
       accTime_ += delta;
     }
 
+    uint32_t steps = 0;
     while (accTime_ >= kTimeQuantum) {
       accTime_ -= kTimeQuantum;
       launchTimer_ += kTimeQuantum;
@@ -730,6 +732,10 @@ class MeshShaderFireworks final : public lvk::metal::ISample {
         const vec3 position(randomRange(-5.0f, 5.0f), -6.0f, randomRange(-2.0f, 2.0f));
         g_Points.launchFirework(position);
       }
+      ++steps;
+    }
+
+    if (steps > 0) {
       vertices_.clear();
       for (int i = 0; i < kMaxParticles; i++) {
         if (g_Points.particles[i].alive) {
@@ -768,10 +774,12 @@ class MeshShaderFireworks final : public lvk::metal::ISample {
       uint64_t perFrame;
       uint64_t vb;
       uint32_t texture;
+      uint32_t sampler;
     } bindings = {
         .perFrame = ctx_->gpuAddress(bufPerFrame_[r]),
         .vb = ctx_->gpuAddress(vb_[bufferIndex_]),
         .texture = texture_.index(),
+        .sampler = sampler_.index(),
     };
     cmd.cmdPushConstants(bindings);
     if (!vertices_.empty()) {

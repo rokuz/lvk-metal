@@ -27,6 +27,7 @@ struct PerFrame {
   uint texAlbedo;
   uint texNormal;
   uint texHeight;
+  uint sampler;
 };
 
 struct DeferredPC {
@@ -115,19 +116,19 @@ fragment GBufferOut deferredFragmentMain(DeferredOut in [[stage_in]], constant D
 
   float2 cur = in.uv;
   float curLayer = 0.0;
-  float curDepth = 1.0 - textureBindless2DLod(pf.texHeight, 0, cur, 0.0).r;
+  float curDepth = 1.0 - textureBindless2DLod(pf.texHeight, pf.sampler, cur, 0.0).r;
   float2 prevCur = cur;
   float prevLayer = curLayer;
   float prevDepth = curDepth;
   for (int i = 0; i < kParallaxSteps && curLayer < curDepth; ++i) {
     prevCur = cur; prevLayer = curLayer; prevDepth = curDepth;
     cur -= deltaUV; curLayer += layerStep;
-    curDepth = 1.0 - textureBindless2DLod(pf.texHeight, 0, cur, 0.0).r;
+    curDepth = 1.0 - textureBindless2DLod(pf.texHeight, pf.sampler, cur, 0.0).r;
   }
   for (int k = 0; k < 3; ++k) {
     const float2 midCur = 0.5 * (prevCur + cur);
     const float midLayer = 0.5 * (prevLayer + curLayer);
-    const float midDepth = 1.0 - textureBindless2DLod(pf.texHeight, 0, midCur, 0.0).r;
+    const float midDepth = 1.0 - textureBindless2DLod(pf.texHeight, pf.sampler, midCur, 0.0).r;
     const bool advance = midLayer < midDepth;
     prevCur = advance ? midCur : prevCur;
     prevLayer = advance ? midLayer : prevLayer;
@@ -138,13 +139,14 @@ fragment GBufferOut deferredFragmentMain(DeferredOut in [[stage_in]], constant D
   }
   const float after = curDepth - curLayer;
   const float before = prevDepth - prevLayer;
-  const float weight = after / (after - before);
+  const float denom = after - before;
+  const float weight = fabs(denom) < 1e-6 ? 0.0 : clamp(after / denom, 0.0, 1.0);
   const float2 uv = mix(cur, prevCur, weight);
 
-  const float3 nm = textureBindless2D(pf.texNormal, 0, uv).xyz * 2.0 - 1.0;
+  const float3 nm = textureBindless2D(pf.texNormal, pf.sampler, uv).xyz * 2.0 - 1.0;
   const float3 n = normalize(TBN * nm);
   GBufferOut o;
-  o.albedo   = 10.0 * textureBindless2D(pf.texAlbedo, 0, uv);
+  o.albedo   = 10.0 * textureBindless2D(pf.texAlbedo, pf.sampler, uv);
   o.normal   = float4(n * 0.5 + 0.5, 1.0);
   o.worldPos = float4(in.worldPos, 1.0);
   return o;
@@ -184,6 +186,7 @@ struct PerFrame {
   uint32_t texAlbedo;
   uint32_t texNormal;
   uint32_t texHeight;
+  uint32_t sampler;
 };
 
 class LocalRead final : public lvk::metal::ISample {
@@ -207,8 +210,8 @@ class LocalRead final : public lvk::metal::ISample {
       int w = 0, h = 0, comp = 0;
       stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &comp, 4);
       if (!pixels) {
-        LLOGW("LocalRead: failed to load %s", path.c_str());
-        return lvk::Holder<lvk::TextureHandle>{};
+        LLOGE("LocalRead: failed to load %s", path.c_str());
+        std::abort();
       }
       lvk::Holder<lvk::TextureHandle> tex = ctx.createTexture({
           .type = lvk::TextureType_2D,
@@ -227,6 +230,8 @@ class LocalRead final : public lvk::metal::ISample {
     texAlbedo_ = loadTexture("Iron_Bars_001_basecolor.jpg");
     texNormal_ = loadTexture("Iron_Bars_001_normal.jpg");
     texHeight_ = loadTexture("Iron_Bars_001_height.png");
+
+    sampler_ = ctx.createSampler({.mipMap = lvk::SamplerMip_Linear, .debugName = "Sampler: linear"});
 
     perFrameBuffer_ = ctx.createBuffer({
         .usage = lvk::BufferUsageBits_Uniform,
@@ -319,6 +324,7 @@ class LocalRead final : public lvk::metal::ISample {
         .texAlbedo = texAlbedo_.index(),
         .texNormal = texNormal_.index(),
         .texHeight = texHeight_.index(),
+        .sampler = sampler_.index(),
     };
     cmd.cmdUpdateBuffer(perFrameBuffer_, 0, sizeof(pf), &pf);
 
@@ -364,6 +370,7 @@ class LocalRead final : public lvk::metal::ISample {
   lvk::Holder<lvk::TextureHandle> texAlbedo_;
   lvk::Holder<lvk::TextureHandle> texNormal_;
   lvk::Holder<lvk::TextureHandle> texHeight_;
+  lvk::Holder<lvk::SamplerHandle> sampler_;
   lvk::Holder<lvk::BufferHandle> perFrameBuffer_;
   uint64_t addrPerFrame_ = 0;
   lvk::Holder<lvk::TextureHandle> gAlbedo_;

@@ -158,8 +158,12 @@ int run(int argc, char** argv, const char* title, std::unique_ptr<ISample>& samp
     while (!glfwWindowShouldClose(window)) {
       glfwPollEvents();
 
-      lvk::ICommandBuffer& cmd = ctx->acquireCommandBuffer();
       const lvk::TextureHandle swapchain = ctx->getCurrentSwapchainTexture();
+      if (swapchain.empty()) {
+        glfwWaitEventsTimeout(0.1);
+        continue;
+      }
+      lvk::ICommandBuffer& cmd = ctx->acquireCommandBuffer();
       sample->render(cmd, swapchain, float(glfwGetTime()));
       ctx->submit(cmd, swapchain);
     }

@@ -152,20 +152,20 @@ class IndirectDraws final : public lvk::metal::ISample {
     pipeline_ = ctx.createRenderPipeline({
         .smVert = vert,
         .smFrag = frag,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .color = {{.format = ctx.getSwapchainFormat()}},
         .debugName = "indirect draw",
     });
     pipelineGray_ = ctx.createRenderPipeline({
         .smVert = vert,
         .smFrag = fragGray,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .color = {{.format = ctx.getSwapchainFormat()}},
         .debugName = "indirect draw (grayscale)",
     });
     meshPipeline_ = ctx.createRenderPipeline({
         .smTask = meshObj,
         .smMesh = meshMesh,
         .smFrag = meshFrag,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .color = {{.format = ctx.getSwapchainFormat()}},
         .debugName = "indirect mesh",
     });
 
@@ -214,18 +214,20 @@ class IndirectDraws final : public lvk::metal::ISample {
                                           .data = tg,
                                           .debugName = "Buffer: mesh threadgroup sizes"});
     ctx.setIndirectBufferMetadata(argsMesh_, {.meshThreadgroupSizes = meshThreadgroups_});
-  }
 
-  void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float) override {
-    cmd.cmdBindComputePipeline(fillPipeline_);
+    lvk::ICommandBuffer& fillCmd = ctx.acquireCommandBuffer();
+    fillCmd.cmdBindComputePipeline(fillPipeline_);
     const struct {
       uint64_t cmds;
       uint64_t primTypes;
       uint32_t count;
-    } cullPC = {.cmds = ctx_->gpuAddress(argsDraw_), .primTypes = ctx_->gpuAddress(primTypes_), .count = kCount};
-    cmd.cmdPushConstants(cullPC);
-    cmd.cmdDispatch({(kCount + 63) / 64, 1, 1});
+    } cullPC = {.cmds = ctx.gpuAddress(argsDraw_), .primTypes = ctx.gpuAddress(primTypes_), .count = kCount};
+    fillCmd.cmdPushConstants(cullPC);
+    fillCmd.cmdDispatch({(kCount + 63) / 64, 1, 1}, {.buffers = {argsDraw_, primTypes_}});
+    ctx.wait(ctx.submit(fillCmd, {}));
+  }
 
+  void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float) override {
     cmd.cmdBeginRendering(
         {.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {.float32 = {0.05f, 0.06f, 0.09f, 1.0f}}}}},
         {.color = {{.texture = target}}},

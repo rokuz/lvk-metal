@@ -12,6 +12,7 @@ struct MainPC {
   Vertex* vb;
   float shadowFar;
   uint shadowMap;
+  uint sampler;
 };
 
 [[vk::push_constant]] MainPC pc;
@@ -50,7 +51,7 @@ float4 fragmentMain(VertexStageOutput input) : SV_Target {
   const float curD = dist - 0.1;
   float factor = 0.0;
   [unroll] for (int i = 0; i < 9; ++i) {
-    const float d = textureBindlessCube(pc.shadowMap, 0, base + k * offsets[i]).r;
+    const float d = textureBindlessCube(pc.shadowMap, pc.sampler, base + k * offsets[i]).r;
     factor += curD > pc.shadowFar * d ? 0.0 : 1.0;
   }
   factor /= 9.0;

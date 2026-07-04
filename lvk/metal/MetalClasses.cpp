@@ -135,6 +135,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   samplersCapacity_ = cfg.initialSamplesPoolSize ? cfg.initialSamplesPoolSize : 1;
   buffersCapacity_ = cfg.initialBuffersPoolSize ? cfg.initialBuffersPoolSize : 1;
   pushConstantsSize_ = cfg.pushConstantsSize;
+  pushConstantsShadow_.assign(pushConstantsSize_, 0);
   pushesPerFrameCapacity_ = cfg.initialPushConstantsPerFrameCount ? cfg.initialPushConstantsPerFrameCount : 1;
 
   if (!createDevice())
@@ -180,7 +181,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   metalLayer_->setFramebufferOnly(!cfg.headless);
   metalLayer_->setDrawableSize(CGSizeMake(width_, height_));
   metalLayer_->setDisplaySyncEnabled(vsync_);
-  metalLayer_->setMaximumDrawableCount(framesInFlight_);
+  metalLayer_->setMaximumDrawableCount(std::clamp<uint32_t>(framesInFlight_, 2, 3));
 
   if (!createQueue())
     return false;
@@ -315,6 +316,12 @@ void MetalContext::removeResident(const MTL::Allocation* allocation) {
   }
 }
 
+void MetalContext::retireResident(NS::SharedPtr<MTL::Buffer> buffer) {
+  if (!buffer)
+    return;
+  deferredTask([this, buffer]() { removeResident(buffer.get()); });
+}
+
 void MetalContext::flushResidency() {
   if (residencyDirty_) {
     residencySet_->commit();
@@ -352,8 +359,7 @@ void MetalContext::growUploadRing(uint32_t minRegionBytes, const MetalImmediateC
   NS::SharedPtr<MTL::Buffer> nb = NS::TransferPtr(
       device_->newBuffer(NS::UInteger(MetalImmediateCommands::kMaxCommandBuffers) * newRegionBytes, MTL::ResourceStorageModeShared));
   ns::setLabel(nb.get(), "lvk-metal.upload.ring");
-  if (uploadRing_)
-    retiredUploadRings_.push_back({uploadRing_, wrapper->handle});
+  retireResident(uploadRing_);
   uploadRing_ = nb;
   addResident(uploadRing_.get());
   uploadRingFrameRegionBytes_ = newRegionBytes;
@@ -438,8 +444,8 @@ void MetalContext::ensureTextureCapacity(uint32_t index) {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   std::memcpy(nbChroma->contents(), yuvChromaHeap_->contents(), NS::UInteger(texturesCapacity_) * sizeof(MTL::ResourceID));
   ns::setLabel(nbChroma.get(), "lvk-metal.bindless.yuvchroma");
-  removeResident(textureHeap_.get());
-  removeResident(yuvChromaHeap_.get());
+  retireResident(textureHeap_);
+  retireResident(yuvChromaHeap_);
   textureHeap_ = nb;
   yuvChromaHeap_ = nbChroma;
   texturesCapacity_ = newCap;
@@ -461,7 +467,7 @@ void MetalContext::ensureSamplerCapacity(uint32_t index) {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), samplerHeap_->contents(), NS::UInteger(samplersCapacity_) * sizeof(MTL::ResourceID));
   ns::setLabel(nb.get(), "lvk-metal.bindless.samplers");
-  removeResident(samplerHeap_.get());
+  retireResident(samplerHeap_);
   samplerHeap_ = nb;
   samplersCapacity_ = newCap;
   addResident(samplerHeap_.get());
@@ -487,7 +493,7 @@ void MetalContext::ensureBufferCapacity(uint32_t index) {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::GPUAddress), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), bufferHeap_->contents(), NS::UInteger(buffersCapacity_) * sizeof(MTL::GPUAddress));
   ns::setLabel(nb.get(), "lvk-metal.bindless.buffers");
-  removeResident(bufferHeap_.get());
+  retireResident(bufferHeap_);
   bufferHeap_ = nb;
   buffersCapacity_ = newCap;
   addResident(bufferHeap_.get());
@@ -507,7 +513,7 @@ void MetalContext::ensureAccelStructCapacity(uint32_t index) {
       NS::TransferPtr(device_->newBuffer(NS::UInteger(newCap) * sizeof(MTL::ResourceID), MTL::ResourceStorageModeShared));
   std::memcpy(nb->contents(), accelStructHeap_->contents(), NS::UInteger(accelStructsCapacity_) * sizeof(MTL::ResourceID));
   ns::setLabel(nb.get(), "lvk-metal.bindless.accelstructs");
-  removeResident(accelStructHeap_.get());
+  retireResident(accelStructHeap_);
   accelStructHeap_ = nb;
   accelStructsCapacity_ = newCap;
   addResident(accelStructHeap_.get());
@@ -520,7 +526,7 @@ void MetalContext::growConstantsRing(const MetalImmediateCommands::CommandBuffer
   NS::SharedPtr<MTL::Buffer> nb = NS::TransferPtr(
       device_->newBuffer(NS::UInteger(MetalImmediateCommands::kMaxCommandBuffers) * newRegionBytes, MTL::ResourceStorageModeShared));
   ns::setLabel(nb.get(), "lvk-metal.pushconstants.ring");
-  retiredConstantRings_.push_back({constantsRing_, wrapper->handle});
+  retireResident(constantsRing_);
   constantsRing_ = nb;
   addResident(constantsRing_.get());
   pushesPerFrameCapacity_ = newPerFrame;
@@ -530,29 +536,12 @@ void MetalContext::growConstantsRing(const MetalImmediateCommands::CommandBuffer
 
 const MetalImmediateCommands::CommandBufferWrapper* MetalContext::beginCommandBuffer() {
   LVK_ASSERT_MSG(!autoreleasePool_, "previous command buffer was not submitted");
-  for (size_t i = 0; i < retiredConstantRings_.size();) {
-    if (immediate_->isReady(retiredConstantRings_[i].handle)) {
-      removeResident(retiredConstantRings_[i].buffer.get());
-      retiredConstantRings_[i] = retiredConstantRings_.back();
-      retiredConstantRings_.pop_back();
-    } else {
-      ++i;
-    }
-  }
-  for (size_t i = 0; i < retiredUploadRings_.size();) {
-    if (immediate_->isReady(retiredUploadRings_[i].handle)) {
-      removeResident(retiredUploadRings_[i].buffer.get());
-      retiredUploadRings_[i] = retiredUploadRings_.back();
-      retiredUploadRings_.pop_back();
-    } else {
-      ++i;
-    }
-  }
   flushResidency();
   autoreleasePool_ = NS::AutoreleasePool::alloc()->init();
   const MetalImmediateCommands::CommandBufferWrapper* wrapper = &immediate_->acquire();
   constantsCursor_ = wrapper->bufferIndex * constantsFrameRegionBytes_;
   uploadRingCursor_ = wrapper->bufferIndex * uploadRingFrameRegionBytes_;
+  std::fill(pushConstantsShadow_.begin(), pushConstantsShadow_.end(), uint8_t(0));
   return wrapper;
 }
 
@@ -569,14 +558,16 @@ SubmitHandle MetalContext::submit(lvk::ICommandBuffer& commandBuffer, TextureHan
   LVK_ASSERT(cmd.wrapper_);
 
   flushResidency();
-  if (immediate_->hasDeferred())
-    immediate_->flushDeferred();
 
   MetalImage* presentImage = present.empty() ? nullptr : textures_.get(present);
   CA::MetalDrawable* drawable = (presentImage && presentImage->isSwapchainImage) ? presentImage->drawable : nullptr;
 
   if (drawable)
     commandQueue_->wait(drawable);
+
+  cmd.endMachineLearningEncoder();
+  cmd.endComputeEncoder();
+  cmd.resolveTimestamps();
 
   const SubmitHandle handle = immediate_->submit(*cmd.wrapper_);
 
@@ -740,6 +731,24 @@ kernel void lvkEncodeMeshTasks(uint tid [[thread_position_in_grid]],
 }
 )";
 
+static const char* kFillBufferMSL = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct LvkFillParams {
+  uint value;
+  uint count;
+};
+
+kernel void lvkFillBuffer(uint tid [[thread_position_in_grid]],
+                          constant LvkFillParams& params [[buffer(0)]],
+                          device uint* dst [[buffer(1)]]) {
+  if (tid < params.count) {
+    dst[tid] = params.value;
+  }
+}
+)";
+
 void MetalContext::createIndirectCommandBufferFor(MetalBuffer& mb, uint32_t elementStride) {
   const uint32_t capacity = uint32_t(mb.size / elementStride);
   if (!capacity)
@@ -802,6 +811,46 @@ bool MetalContext::ensureIndirectEncoder() {
   return true;
 }
 
+bool MetalContext::ensureFillPipeline() {
+  if (fillPipeline_ && fillArgTable_)
+    return true;
+  NS::Error* error = nullptr;
+  NS::SharedPtr<MTL::Library> lib = NS::TransferPtr(device_->newLibrary(ns::string(kFillBufferMSL), nullptr, &error));
+  NS::SharedPtr<MTL::Function> fn = lib ? NS::TransferPtr(lib->newFunction(ns::string("lvkFillBuffer"))) : nullptr;
+  fillPipeline_ = fn ? NS::TransferPtr(device_->newComputePipelineState(fn.get(), &error)) : nullptr;
+  if (!fillPipeline_) {
+    LLOGE("buffer fill pipeline failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    return false;
+  }
+  NS::SharedPtr<MTL4::ArgumentTableDescriptor> atd = ns::make<MTL4::ArgumentTableDescriptor>();
+  atd->setMaxBufferBindCount(2);
+  ns::setLabel(atd.get(), "lvk-metal.fill.argtable");
+  fillArgTable_ = NS::TransferPtr(device_->newArgumentTable(atd.get(), &error));
+  if (!fillArgTable_) {
+    LLOGE("buffer fill argtable failed: %s", error ? error->localizedDescription()->utf8String() : "unknown");
+    return false;
+  }
+  return true;
+}
+
+void MetalContext::encodeBufferFill(MTL4::ComputeCommandEncoder* enc,
+                                    const MetalBuffer* b,
+                                    size_t offset,
+                                    size_t size,
+                                    uint32_t data,
+                                    const MetalImmediateCommands::CommandBufferWrapper* wrapper) {
+  const uint32_t words = uint32_t(size / sizeof(uint32_t));
+  if (!words || !ensureFillPipeline())
+    return;
+  const uint32_t params[2] = {data, words};
+  const MTL::GPUAddress paramsAddr = writePushConstants(params, sizeof(params), wrapper);
+  fillArgTable_->setAddress(paramsAddr, 0);
+  fillArgTable_->setAddress(b->buffer->gpuAddress() + offset, 1);
+  enc->setComputePipelineState(fillPipeline_.get());
+  enc->setArgumentTable(fillArgTable_.get());
+  enc->dispatchThreads(MTL::Size(words, 1, 1), MTL::Size(64, 1, 1));
+}
+
 void MetalContext::encodeIndirectDraws(const Dependencies& deps, const MetalImmediateCommands::CommandBufferWrapper* wrapper) {
   MTL4::ComputeCommandEncoder* enc = nullptr;
   for (size_t i = 0; i < deps.buffers.size(); ++i) {
@@ -820,7 +869,7 @@ void MetalContext::encodeIndirectDraws(const Dependencies& deps, const MetalImme
     const bool typed = primTypes != nullptr;
     const uint32_t stride = meshTg ? 12u : (indexBuf ? 20u : 16u);
     const uint32_t count = uint32_t(b->size / stride);
-    const MTL::GPUAddress paramsAddr = writePushConstants(&count, sizeof(count), 0, wrapper);
+    const MTL::GPUAddress paramsAddr = writePushConstants(&count, sizeof(count), wrapper);
     icbEncodeArgTable_->setAddress(paramsAddr, 0);
     icbEncodeArgTable_->setAddress(b->buffer->gpuAddress(), 1);
     icbEncodeArgTable_->setAddress(b->icbContainer->gpuAddress(), 2);
@@ -950,12 +999,13 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
   td->setMipmapLevelCount(desc.numMipLevels);
   td->setArrayLength(desc.numLayers ? desc.numLayers : 1);
   td->setSampleCount(numSamples);
-  td->setUsage(toMTLTextureUsage(desc.usage) | MTL::TextureUsagePixelFormatView);
+  td->setUsage(toMTLTextureUsage(desc.usage));
   td->setStorageMode(toMTLStorageMode(desc.storage));
 
   NS::SharedPtr<MTL::Texture> texture = NS::TransferPtr(device_->newTexture(td.get()));
   if (!texture) {
     Result::setResult(outResult, Result::Code::RuntimeError, "newTexture failed");
+    return {};
   }
   ns::setLabel(texture.get(), debugName ? debugName : desc.debugName);
   if (texture->storageMode() != MTL::StorageModeMemoryless)
@@ -973,6 +1023,7 @@ Holder<TextureHandle> MetalContext::createTexture(const TextureDesc& desc, const
   img.format = toMTLPixelFormat(desc.format);
   img.width = desc.dimensions.width;
   img.height = desc.dimensions.height;
+  img.depth = desc.type == TextureType_3D ? std::max(1u, desc.dimensions.depth) : 1;
   img.texture = std::move(texture);
   const TextureHandle handle = textures_.create(std::move(img));
   ensureTextureCapacity(handle.index());
@@ -1065,6 +1116,12 @@ Holder<QueryPoolHandle> MetalContext::createQueryPool(uint32_t numQueries, const
   MetalQueryPool qp;
   qp.heap = std::move(heap);
   qp.count = numQueries;
+  qp.resolved = NS::TransferPtr(device_->newBuffer(uint64_t(numQueries) * sizeof(uint64_t), MTL::ResourceStorageModeShared));
+  if (qp.resolved) {
+    std::memset(qp.resolved->contents(), 0, qp.resolved->length());
+    ns::setLabel(qp.resolved.get(), "lvk-metal.query.resolved");
+    addResident(qp.resolved.get());
+  }
   return {this, queryPools_.create(std::move(qp))};
 }
 
@@ -1081,22 +1138,15 @@ bool MetalContext::getQueryPoolResults(QueryPoolHandle pool,
                                        void* outData,
                                        size_t stride) const {
   const MetalQueryPool* qp = queryPools_.get(pool);
-  if (!qp || !qp->heap)
+  if (!qp || !qp->resolved)
     return false;
 
-  NS::Data* resolved = qp->heap->resolveCounterRange(NS::Range(firstQuery, queryCount));
-  if (!resolved)
-    return false;
-  using BytesMsg = const void* (*)(const void*, SEL);
-  const void* rawBytes = reinterpret_cast<BytesMsg>(objc_msgSend)(resolved, sel_registerName("bytes"));
-  const MTL4::TimestampHeapEntry* entries = static_cast<const MTL4::TimestampHeapEntry*>(rawBytes);
-  if (!entries)
-    return false;
+  const uint64_t* src = static_cast<const uint64_t*>(qp->resolved->contents());
   uint8_t* dst = static_cast<uint8_t*>(outData);
   for (uint32_t i = 0; i < queryCount; ++i) {
-    if ((i + 1) * stride > dataSize)
+    if ((i + 1) * stride > dataSize || firstQuery + i >= qp->count)
       break;
-    const uint64_t value = entries[i].timestamp;
+    const uint64_t value = src[firstQuery + i];
     std::memcpy(dst + size_t(i) * stride, &value, sizeof(value));
   }
   return true;
@@ -1343,6 +1393,8 @@ Holder<RenderPipelineHandle> MetalContext::createRenderPipeline(const RenderPipe
     }
     if (desc.depthFormat != Format_Invalid)
       mpd->setDepthAttachmentPixelFormat(toMTLPixelFormat(desc.depthFormat));
+    if (desc.stencilFormat != Format_Invalid)
+      mpd->setStencilAttachmentPixelFormat(toMTLPixelFormat(desc.stencilFormat));
     mpd->setRasterSampleCount(desc.samplesCount ? desc.samplesCount : 1);
     mpd->setAlphaToCoverageEnabled(desc.alphaToCoverage);
     const MTL::Size objTG = task && task->function ? task->threadgroupSize : MTL::Size(1, 1, 1);
@@ -1566,6 +1618,17 @@ Result MetalContext::download(TensorHandle handle, void* data, size_t size) {
   return Result();
 }
 
+static bool bindTensorsToArgTable(
+    const MetalContext* ctx, MTL4::ArgumentTable* table, const TensorHandle* tensors, uint32_t count, uint32_t baseIndex) {
+  for (uint32_t i = 0; i < count; ++i) {
+    const MetalTensor* mt = ctx->getTensor(tensors[i]);
+    if (!mt || !mt->tensor)
+      return false;
+    table->setResource(mt->tensor->gpuResourceID(), baseIndex + i);
+  }
+  return true;
+}
+
 Holder<MLPipelineHandle> MetalContext::createMachineLearningPipeline(const MachineLearningPipelineDesc& desc, Result* outResult) {
   if (!compiler_) {
     Result::setResult(outResult, Result::Code::RuntimeError, "MTL4 compiler unavailable");
@@ -1658,18 +1721,13 @@ Holder<MLPipelineHandle> MetalContext::createMachineLearningPipeline(const Machi
     Result::setResult(outResult, Result::Code::RuntimeError, "newArgumentTable failed");
     return {};
   }
-  for (uint32_t i = 0; i < desc.numInputs; ++i) {
-    if (const MetalTensor* mt = tensors_.get(desc.inputs[i]))
-      mp.argTable->setResource(mt->tensor->gpuResourceID(), i);
+  if (!bindTensorsToArgTable(this, mp.argTable.get(), desc.inputs, desc.numInputs, 0) ||
+      !bindTensorsToArgTable(this, mp.argTable.get(), desc.outputs, desc.numOutputs, desc.numInputs)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "invalid ML input/output tensor");
+    return {};
   }
-  for (uint32_t i = 0; i < desc.numOutputs; ++i) {
-    const MetalTensor* mt = tensors_.get(desc.outputs[i]);
-    if (!mt || !mt->tensor) {
-      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "invalid ML output tensor");
-      return {};
-    }
-    mp.argTable->setResource(mt->tensor->gpuResourceID(), desc.numInputs + i);
-  }
+  mp.numInputs = desc.numInputs;
+  mp.numOutputs = desc.numOutputs;
   return {this, mlPipelines_.create(std::move(mp))};
 }
 
@@ -1833,12 +1891,11 @@ static NS::SharedPtr<MTL4::IndirectInstanceAccelerationStructureDescriptor> make
   return d;
 }
 
-static void translateInstances(const MetalBuffer* src, MTL::Buffer* dst, uint32_t count) {
-  if (!src || !src->buffer || src->buffer->storageMode() != MTL::StorageModeShared || !dst)
+static void translateInstances(const MetalBuffer* src, MTL::IndirectAccelerationStructureInstanceDescriptor* out, uint32_t count) {
+  if (!src || !src->buffer || src->buffer->storageMode() != MTL::StorageModeShared || !out)
     return;
+  count = std::min(count, uint32_t(src->size / sizeof(AccelStructInstance)));
   const AccelStructInstance* in = static_cast<const AccelStructInstance*>(src->buffer->contents());
-  MTL::IndirectAccelerationStructureInstanceDescriptor* out =
-      static_cast<MTL::IndirectAccelerationStructureInstanceDescriptor*>(dst->contents());
   for (uint32_t i = 0; i < count; ++i) {
     const AccelStructInstance& s = in[i];
     MTL::IndirectAccelerationStructureInstanceDescriptor& d = out[i];
@@ -1898,7 +1955,9 @@ Holder<AccelStructHandle> MetalContext::createAccelerationStructure(const AccelS
       as.instanceDescriptors = NS::TransferPtr(device_->newBuffer(instBytes, MTL::ResourceStorageModeShared));
       ns::setLabel(as.instanceDescriptors.get(), "lvk-metal.tlas.instances");
       addResident(as.instanceDescriptors.get());
-      translateInstances(buffers_.get(desc.instancesBuffer), as.instanceDescriptors.get(), as.numInstances);
+      translateInstances(buffers_.get(desc.instancesBuffer),
+                         static_cast<MTL::IndirectAccelerationStructureInstanceDescriptor*>(as.instanceDescriptors->contents()),
+                         as.numInstances);
       tlasDesc = makeInstanceTlasDescriptor(as.instanceDescriptors->gpuAddress(), as.numInstances);
       as.tlasDescriptor = tlasDesc;
       asDesc = tlasDesc.get();
@@ -2101,6 +2160,8 @@ Result MetalContext::upload(BufferHandle handle, const void* data, size_t size, 
   MetalBuffer* mb = buffers_.get(handle);
   if (!mb || !mb->buffer)
     return Result(Result::Code::ArgumentOutOfRange, "invalid buffer");
+  if (offset > mb->size || size > mb->size - offset)
+    return Result(Result::Code::ArgumentOutOfRange, "upload range exceeds buffer size");
   if (mb->buffer->storageMode() == MTL::StorageModeShared) {
     std::memcpy(static_cast<uint8_t*>(mb->buffer->contents()) + offset, data, size);
     return Result();
@@ -2113,6 +2174,8 @@ Result MetalContext::download(BufferHandle handle, void* data, size_t size, size
   const MetalBuffer* mb = buffers_.get(handle);
   if (!mb || !mb->buffer)
     return Result(Result::Code::ArgumentOutOfRange, "invalid buffer");
+  if (offset > mb->size || size > mb->size - offset)
+    return Result(Result::Code::ArgumentOutOfRange, "download range exceeds buffer size");
   if (mb->buffer->storageMode() == MTL::StorageModeShared) {
     std::memcpy(data, static_cast<const uint8_t*>(mb->buffer->contents()) + offset, size);
     return Result();
@@ -2152,28 +2215,36 @@ Result MetalContext::upload(TextureHandle handle, const TextureRangeDesc& range,
   if (!img || !img->texture)
     return Result(Result::Code::ArgumentOutOfRange, "invalid texture");
   const bool is3D = img->texture->textureType() == MTL::TextureType3D;
-  const uint32_t depth = is3D ? range.dimensions.depth : 1;
-  const uint32_t z = is3D ? uint32_t(range.offset.z) : 0;
-  const uint32_t slice = is3D ? 0 : range.layer;
-  if (img->texture->storageMode() == MTL::StorageModePrivate) {
-    staging_->uploadTexture(img->texture.get(),
-                            uint32_t(range.offset.x),
-                            uint32_t(range.offset.y),
-                            z,
-                            range.dimensions.width,
-                            range.dimensions.height,
-                            depth,
-                            slice,
-                            range.mipLevel,
-                            data,
-                            bufferRowLength);
-    return Result();
-  }
+  const bool isShared = img->texture->storageMode() != MTL::StorageModePrivate;
+  const uint32_t numLayers = is3D ? 1 : (range.numLayers ? range.numLayers : 1);
+  const uint32_t numMips = range.numMipLevels ? range.numMipLevels : 1;
   const NS::UInteger bpp = bytesPerMetalPixel(img->texture->pixelFormat());
-  const NS::UInteger bytesPerRow = NS::UInteger(bufferRowLength ? bufferRowLength : range.dimensions.width) * bpp;
-  const NS::UInteger bytesPerImage = is3D ? bytesPerRow * range.dimensions.height : 0;
-  const MTL::Region region(uint32_t(range.offset.x), uint32_t(range.offset.y), z, range.dimensions.width, range.dimensions.height, depth);
-  img->texture->replaceRegion(region, range.mipLevel, slice, data, bytesPerRow, bytesPerImage);
+  const Format fmt = toLVKFormat(img->format);
+  const uint32_t rowLen = (numMips > 1 || numLayers > 1) ? 0 : bufferRowLength;
+  const uint8_t* src = static_cast<const uint8_t*>(data);
+
+  for (uint32_t mip = 0; mip < numMips; ++mip) {
+    const uint32_t curMip = range.mipLevel + mip;
+    const uint32_t w = std::max(1u, range.dimensions.width >> mip);
+    const uint32_t h = std::max(1u, range.dimensions.height >> mip);
+    const uint32_t depth = is3D ? std::max(1u, range.dimensions.depth >> mip) : 1;
+    const uint32_t z = is3D ? uint32_t(range.offset.z) : 0;
+    const uint32_t ox = uint32_t(range.offset.x) >> mip;
+    const uint32_t oy = uint32_t(range.offset.y) >> mip;
+    const uint32_t sliceBytes = getTextureBytesPerLayer(range.dimensions.width, range.dimensions.height, fmt, curMip) * depth;
+    for (uint32_t layer = 0; layer < numLayers; ++layer) {
+      const uint32_t slice = is3D ? 0 : (range.layer + layer);
+      if (isShared) {
+        const NS::UInteger bytesPerRow = NS::UInteger(rowLen ? rowLen : w) * bpp;
+        const NS::UInteger bytesPerImage = is3D ? bytesPerRow * h : 0;
+        const MTL::Region region(ox, oy, z, w, h, depth);
+        img->texture->replaceRegion(region, curMip, slice, src, bytesPerRow, bytesPerImage);
+      } else {
+        staging_->uploadTexture(img->texture.get(), ox, oy, z, w, h, depth, slice, curMip, src, rowLen);
+      }
+      src += sliceBytes;
+    }
+  }
   return Result();
 }
 
@@ -2185,14 +2256,16 @@ Result MetalContext::download(TextureHandle handle, const TextureRangeDesc& rang
   const uint32_t h = range.dimensions.height;
 
   MTL::Texture* src = img->texture.get();
+  const bool is3D = src->textureType() == MTL::TextureType3D;
+  const NS::UInteger bpp = bytesPerMetalPixel(src->pixelFormat());
+  const NS::UInteger bytesPerRow = NS::UInteger(w) * bpp;
+  const NS::UInteger bytesPerImage = bytesPerRow * h;
   if (src->storageMode() == MTL::StorageModeShared) {
     const MTL::Region region(uint32_t(range.offset.x), uint32_t(range.offset.y), w, h);
-    src->getBytes(outData, NS::UInteger(w) * 4, region, range.mipLevel);
+    src->getBytes(outData, bytesPerRow, is3D ? bytesPerImage : 0, region, range.mipLevel, range.layer);
     return Result();
   }
 
-  const NS::UInteger bytesPerRow = NS::UInteger(w) * 4;
-  const NS::UInteger bytesPerImage = bytesPerRow * h;
   NS::SharedPtr<MTL::Buffer> staging = NS::TransferPtr(device_->newBuffer(bytesPerImage, MTL::ResourceStorageModeShared));
   if (!staging)
     return Result(Result::Code::RuntimeError, "download staging buffer alloc failed");
@@ -2232,7 +2305,7 @@ Dimensions MetalContext::getDimensions(TextureHandle handle) const {
   const MetalImage* img = textures_.get(handle);
   if (!img)
     return {};
-  return {img->width, img->height, 1};
+  return {img->width, img->height, img->depth};
 }
 
 float MetalContext::getAspectRatio(TextureHandle handle) const {
@@ -2249,15 +2322,14 @@ Format MetalContext::getFormat(TextureHandle handle) const {
 
 MTL::GPUAddress MetalContext::writePushConstants(const void* data,
                                                  size_t size,
-                                                 size_t offset,
                                                  const MetalImmediateCommands::CommandBufferWrapper* wrapper) {
   LVK_ASSERT(wrapper);
-  LVK_ASSERT(offset + size <= pushConstantsSize_);
+  LVK_ASSERT(size <= pushConstantsSize_);
   const uint32_t regionEnd = (wrapper->bufferIndex + 1) * constantsFrameRegionBytes_;
   if (constantsCursor_ + pushConstantsSize_ > regionEnd)
     growConstantsRing(wrapper);
   const uint32_t slot = constantsCursor_;
-  std::memcpy(static_cast<uint8_t*>(constantsRing_->contents()) + slot + offset, data, size);
+  std::memcpy(static_cast<uint8_t*>(constantsRing_->contents()) + slot, data, size);
   constantsCursor_ += pushConstantsSize_;
   return constantsRing_->gpuAddress() + slot;
 }
@@ -2338,6 +2410,15 @@ void MetalContext::recreateSwapchain(int newWidth, int newHeight) {
   height_ = uint32_t(newHeight);
   if (metalLayer_)
     metalLayer_->setDrawableSize(CGSizeMake(newWidth, newHeight));
+  if (MetalImage* img = swapchainTextureHandle_.empty() ? nullptr : textures_.get(swapchainTextureHandle_)) {
+    if (img->drawable) {
+      img->drawable->release();
+      img->drawable = nullptr;
+    }
+    img->texture.reset();
+    img->width = width_;
+    img->height = height_;
+  }
 }
 
 void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
@@ -2345,7 +2426,6 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
                                       const lvk::Dependencies& deps) {
   endMachineLearningEncoder();
   endComputeEncoder();
-  pendingMLBarrier_ = false;
   ctx_->encodeIndirectDraws(deps, wrapper_);
 
   NS::SharedPtr<MTL4::RenderPassDescriptor> rpd = ns::make<MTL4::RenderPassDescriptor>();
@@ -2447,6 +2527,9 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
   if (!deps.inputAttachments.empty()) {
     encoder_->barrierAfterQueueStages(MTL::StageFragment, MTL::StageFragment, MTL4::VisibilityOptionDevice);
   }
+  if (ctx_->takePendingMLBarrier()) {
+    encoder_->barrierAfterQueueStages(MTL::StageMachineLearning, shaderReadStages, MTL4::VisibilityOptionDevice);
+  }
 
   isRendering_ = true;
   argTableOverridden_ = false;
@@ -2502,7 +2585,12 @@ MTL4::ComputeCommandEncoder* CommandBuffer::beginTransferEncoder() {
   LVK_ASSERT_MSG(!isRendering_, "transfer commands must be recorded outside cmdBeginRendering()/cmdEndRendering()");
   endMachineLearningEncoder();
   endComputeEncoder();
-  return wrapper_->cmdBuf.get()->computeCommandEncoder();
+  MTL4::ComputeCommandEncoder* enc = wrapper_->cmdBuf.get()->computeCommandEncoder();
+  if (ctx_->takePendingMLBarrier()) {
+    enc->barrierAfterQueueStages(
+        MTL::StageMachineLearning, MTL::StageDispatch | MTL::StageBlit | MTL::StageAccelerationStructure, MTL4::VisibilityOptionDevice);
+  }
+  return enc;
 }
 
 void CommandBuffer::cmdCopyBuffer(BufferHandle srcBuffer, BufferHandle dstBuffer, size_t srcOffset, size_t dstOffset, size_t size) {
@@ -2523,10 +2611,21 @@ void CommandBuffer::cmdFillBuffer(BufferHandle buffer, size_t bufferOffset, size
   const MetalBuffer* b = ctx_->getBuffer(buffer);
   if (!b || !b->buffer)
     return;
-  if (size == LVK_WHOLE_SIZE)
+  if (bufferOffset >= b->size)
+    return;
+  if (size == LVK_WHOLE_SIZE || size > b->size - bufferOffset)
     size = b->size - bufferOffset;
+  if (!size)
+    return;
+  const uint8_t byte0 = uint8_t(data);
+  const bool uniformBytes = byte0 == uint8_t(data >> 8) && byte0 == uint8_t(data >> 16) && byte0 == uint8_t(data >> 24);
+
   MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
-  enc->fillBuffer(b->buffer.get(), NS::Range(bufferOffset, size), static_cast<uint8_t>(data));
+  if (uniformBytes) {
+    enc->fillBuffer(b->buffer.get(), NS::Range(bufferOffset, size), byte0);
+  } else {
+    ctx_->encodeBufferFill(enc, b, bufferOffset, size, data, wrapper_);
+  }
   enc->barrierAfterStages(
       MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
   enc->endEncoding();
@@ -2610,10 +2709,26 @@ void CommandBuffer::cmdGenerateMipmap(TextureHandle handle) {
 
 void CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) {
   const MetalAccelStruct* as = ctx_->getAccelStruct(handle);
-  if (!as || !as->accel || as->type != AccelStructType_TLAS || !as->tlasDescriptor)
+  if (!as || !as->accel || as->type != AccelStructType_TLAS || !as->instanceDescriptors || !as->tlasDescriptor)
     return;
-  translateInstances(ctx_->getBuffer(instancesBuffer), as->instanceDescriptors.get(), as->numInstances);
+  const uint32_t stride = ctx_->indirectTLASInstanceDescriptorSize();
+  const size_t bytes = size_t(stride) * as->numInstances;
+  if (!bytes)
+    return;
+
+  std::vector<uint8_t> scratch(bytes);
+  translateInstances(ctx_->getBuffer(instancesBuffer),
+                     reinterpret_cast<MTL::IndirectAccelerationStructureInstanceDescriptor*>(scratch.data()),
+                     as->numInstances);
+  const MetalContext::StagingAlloc staging = ctx_->writeUploadStaging(scratch.data(), bytes, wrapper_);
+
   MTL4::ComputeCommandEncoder* enc = beginTransferEncoder();
+  enc->barrierAfterQueueStages(MTL::StageAccelerationStructure, MTL::StageBlit, MTL4::VisibilityOptionDevice);
+  enc->copyFromBuffer(staging.buffer, staging.offset, as->instanceDescriptors.get(), 0, bytes);
+  enc->barrierAfterQueueStages(MTL::StageBlit | MTL::StageDispatch | MTL::StageVertex | MTL::StageFragment |
+                                   MTL::StageAccelerationStructure,
+                               MTL::StageAccelerationStructure,
+                               MTL4::VisibilityOptionDevice);
   enc->buildAccelerationStructure(
       as->accel.get(), as->tlasDescriptor.get(), MTL4::BufferRange(as->scratch->gpuAddress(), as->scratch->length()));
   enc->barrierAfterStages(
@@ -2672,13 +2787,13 @@ void CommandBuffer::cmdBindComputePipeline(ComputePipelineHandle handle) {
   LVK_ASSERT(p && p->pipeline);
   if (!p || !p->pipeline)
     return;
+  endMachineLearningEncoder();
   if (!computeEncoder_) {
     computeEncoder_ = wrapper_->cmdBuf.get()->computeCommandEncoder();
     bindArgumentTableInternal(ctx_->defaultArgumentTable());
-    if (pendingMLBarrier_) {
+    if (ctx_->takePendingMLBarrier()) {
       computeEncoder_->barrierAfterQueueStages(
           MTL::StageMachineLearning, MTL::StageDispatch | MTL::StageBlit, MTL4::VisibilityOptionDevice);
-      pendingMLBarrier_ = false;
     }
   }
   computeEncoder_->setComputePipelineState(p->pipeline.get());
@@ -2688,21 +2803,26 @@ void CommandBuffer::cmdBindComputePipeline(ComputePipelineHandle handle) {
 void CommandBuffer::cmdDispatch(const Dimensions& groupCount, const Dependencies& deps) {
   if (!computeEncoder_)
     return;
+  const bool hasDeps = !deps.storageImages.empty() || !deps.buffers.empty() || !deps.sampledImages.empty();
+  if (hasDeps)
+    computeEncoder_->barrierAfterQueueStages(
+        MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch | MTL::StageBlit, MTL::StageDispatch, MTL4::VisibilityOptionDevice);
   computeEncoder_->dispatchThreadgroups(MTL::Size(groupCount.width, groupCount.height, groupCount.depth), computeThreadgroupSize_);
-  if (!deps.storageImages.empty() || !deps.buffers.empty() || !deps.sampledImages.empty())
+  if (hasDeps)
     computeEncoder_->barrierAfterStages(
         MTL::StageDispatch, MTL::StageDispatch | MTL::StageBlit | MTL::StageVertex | MTL::StageFragment, MTL4::VisibilityOptionDevice);
-  endComputeEncoder();
 }
 
-void CommandBuffer::cmdDispatchIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, const Dependencies&) {
+void CommandBuffer::cmdDispatchIndirect(BufferHandle indirectBuffer, size_t indirectBufferOffset, const Dependencies& deps) {
   if (!computeEncoder_)
     return;
   const MetalBuffer* b = ctx_->getBuffer(indirectBuffer);
   if (!b || !b->buffer)
     return;
+  if (!deps.storageImages.empty() || !deps.buffers.empty() || !deps.sampledImages.empty())
+    computeEncoder_->barrierAfterQueueStages(
+        MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch | MTL::StageBlit, MTL::StageDispatch, MTL4::VisibilityOptionDevice);
   computeEncoder_->dispatchThreadgroups(b->buffer->gpuAddress() + indirectBufferOffset, computeThreadgroupSize_);
-  endComputeEncoder();
 }
 
 void CommandBuffer::cmdBindDepthState(const DepthState& state) {
@@ -2758,7 +2878,11 @@ void CommandBuffer::cmdDispatchTile() {
   encoder_->dispatchThreadsPerTile(MTL::Size(encoder_->tileWidth(), encoder_->tileHeight(), 1));
 }
 
-void CommandBuffer::cmdBindMachineLearningPipeline(MLPipelineHandle handle) {
+void CommandBuffer::cmdBindMachineLearningPipeline(MLPipelineHandle handle,
+                                                   const TensorHandle* inputs,
+                                                   uint32_t numInputs,
+                                                   const TensorHandle* outputs,
+                                                   uint32_t numOutputs) {
   LVK_ASSERT_MSG(!isRendering_, "cmdBindMachineLearningPipeline() must be recorded outside cmdBeginRendering()/cmdEndRendering()");
   const MetalMachineLearningPipeline* p = ctx_->getMachineLearningPipeline(handle);
   LVK_ASSERT(p && p->pipeline);
@@ -2768,8 +2892,16 @@ void CommandBuffer::cmdBindMachineLearningPipeline(MLPipelineHandle handle) {
   if (!mlEncoder_)
     mlEncoder_ = wrapper_->cmdBuf.get()->machineLearningCommandEncoder();
   mlEncoder_->setPipelineState(p->pipeline.get());
-  if (p->argTable)
+  LVK_ASSERT_MSG(!numInputs || inputs, "cmdBindMachineLearningPipeline: inputs is null but numInputs > 0");
+  LVK_ASSERT_MSG(!numOutputs || outputs, "cmdBindMachineLearningPipeline: outputs is null but numOutputs > 0");
+  LVK_ASSERT_MSG(numInputs <= p->numInputs, "cmdBindMachineLearningPipeline: more inputs than the pipeline was created with");
+  LVK_ASSERT_MSG(numOutputs <= p->numOutputs, "cmdBindMachineLearningPipeline: more outputs than the pipeline was created with");
+  if (p->argTable) {
+    const bool bound = bindTensorsToArgTable(ctx_, p->argTable.get(), inputs, numInputs, 0) &&
+                       bindTensorsToArgTable(ctx_, p->argTable.get(), outputs, numOutputs, p->numInputs);
+    LVK_ASSERT_MSG(bound, "cmdBindMachineLearningPipeline: an override tensor handle is invalid");
     mlEncoder_->setArgumentTable(p->argTable.get());
+  }
   mlPipeline_ = p;
 }
 
@@ -2779,10 +2911,13 @@ void CommandBuffer::cmdDispatchNetwork() {
   mlEncoder_->barrierAfterQueueStages(MTL::StageDispatch | MTL::StageBlit, MTL::StageMachineLearning, MTL4::VisibilityOptionDevice);
   mlEncoder_->dispatchNetwork(mlPipeline_->intermediatesHeap.get());
   endMachineLearningEncoder();
-  pendingMLBarrier_ = true;
+  ctx_->setPendingMLBarrier(true);
 }
 
 void CommandBuffer::cmdBindViewport(const Viewport& viewport) {
+  LVK_ASSERT_MSG(encoder_, "cmdBindViewport() must be recorded inside cmdBeginRendering()/cmdEndRendering()");
+  if (!encoder_)
+    return;
   MTL::Viewport vp;
   vp.originX = viewport.x;
   vp.originY = viewport.y;
@@ -2794,6 +2929,9 @@ void CommandBuffer::cmdBindViewport(const Viewport& viewport) {
 }
 
 void CommandBuffer::cmdBindScissorRect(const ScissorRect& rect) {
+  LVK_ASSERT_MSG(encoder_, "cmdBindScissorRect() must be recorded inside cmdBeginRendering()/cmdEndRendering()");
+  if (!encoder_)
+    return;
   MTL::ScissorRect r;
   r.x = rect.x;
   r.y = rect.y;
@@ -2812,7 +2950,12 @@ void CommandBuffer::cmdPushConstants(const void* data, size_t size, size_t offse
   const MetalArgumentTable* at = ctx_->getArgumentTable(currentArgTable_);
   if (!at || at->constantsIndex == UINT32_MAX)
     return;
-  const MTL::GPUAddress addr = ctx_->writePushConstants(data, size, offset, wrapper_);
+  const uint32_t maxSize = ctx_->pushConstantsSize();
+  uint8_t* shadow = ctx_->pushConstantsShadow();
+  const size_t writable = offset < maxSize ? std::min<size_t>(size, maxSize - offset) : 0;
+  if (writable)
+    std::memcpy(shadow + offset, data, writable);
+  const MTL::GPUAddress addr = ctx_->writePushConstants(shadow, maxSize, wrapper_);
   at->table->setAddress(addr, at->constantsIndex);
   setArgumentTableOnActiveEncoder(at->table.get());
 }
@@ -2843,12 +2986,24 @@ void CommandBuffer::cmdDrawIndexedIndirect(BufferHandle indirectBuffer, size_t i
     return;
   applyDepthStencilState();
   if (drawCount == 1) {
-    const MetalBuffer* idx = b->icbIndexBuffer.empty() ? nullptr : ctx_->getBuffer(b->icbIndexBuffer);
+    const MetalBuffer* idx = nullptr;
+    MTL::IndexType indexType = MTL::IndexTypeUInt32;
+    uint64_t indexOffset = 0;
+    if (!b->icbIndexBuffer.empty()) {
+      idx = ctx_->getBuffer(b->icbIndexBuffer);
+      indexType = b->icbIndexFormat == IndexFormat_UI16 ? MTL::IndexTypeUInt16 : MTL::IndexTypeUInt32;
+    } else {
+      idx = ctx_->getBuffer(boundIndexBuffer_);
+      indexType = boundIndexType_;
+      indexOffset = boundIndexOffset_;
+    }
     if (!idx || !idx->buffer)
       return;
-    const MTL::IndexType indexType = b->icbIndexFormat == IndexFormat_UI16 ? MTL::IndexTypeUInt16 : MTL::IndexTypeUInt32;
-    encoder_->drawIndexedPrimitives(
-        topology_, indexType, idx->buffer->gpuAddress(), idx->size, b->buffer->gpuAddress() + indirectBufferOffset);
+    encoder_->drawIndexedPrimitives(topology_,
+                                    indexType,
+                                    idx->buffer->gpuAddress() + indexOffset,
+                                    idx->size - indexOffset,
+                                    b->buffer->gpuAddress() + indirectBufferOffset);
   } else if (b->icb) {
     const uint32_t firstCommand = uint32_t(indirectBufferOffset / (stride ? stride : 20));
     encoder_->executeCommandsInBuffer(b->icb.get(), NS::Range(firstCommand, drawCount));
@@ -2925,21 +3080,51 @@ void CommandBuffer::applyDepthBias() {
     encoder_->setDepthBias(0.0f, 0.0f, 0.0f);
 }
 
-void CommandBuffer::cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) {
-  if (MTL4::CounterHeap* heap = ctx_->getQueryHeap(pool))
-    heap->invalidateCounterRange(NS::Range(firstQuery, queryCount));
-}
+void CommandBuffer::cmdResetQueryPool(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount) {}
 
 void CommandBuffer::cmdWriteTimestamp(QueryPoolHandle pool, uint32_t query) {
   MTL4::CounterHeap* heap = ctx_->getQueryHeap(pool);
   if (!heap)
     return;
-  if (computeEncoder_)
-    computeEncoder_->writeTimestamp(MTL4::TimestampGranularityPrecise, heap, query);
-  else if (encoder_)
+#ifndef LVK_METAL_DISABLE_GPU_COUNTERS
+  if (encoder_) {
     encoder_->writeTimestamp(MTL4::TimestampGranularityPrecise, MTL::RenderStageFragment, heap, query);
-  else if (MTL4::CommandBuffer* cb = wrapper_->cmdBuf.get())
-    cb->writeTimestampIntoHeap(heap, query);
+  } else {
+    endComputeEncoder();
+    if (MTL4::CommandBuffer* cb = wrapper_->cmdBuf.get())
+      cb->writeTimestampIntoHeap(heap, query);
+  }
+#endif
+
+  for (TimestampSpan& s : timestampSpans_) {
+    if (s.pool == pool) {
+      s.lo = std::min(s.lo, query);
+      s.hi = std::max(s.hi, query);
+      return;
+    }
+  }
+  timestampSpans_.push_back({pool, query, query});
+}
+
+void CommandBuffer::resolveTimestamps() {
+  MTL4::CommandBuffer* cb = wrapper_ ? wrapper_->cmdBuf.get() : nullptr;
+  if (!cb)
+    return;
+#ifndef LVK_METAL_DISABLE_GPU_COUNTERS
+  for (const TimestampSpan& s : timestampSpans_) {
+    const MetalQueryPool* qp = ctx_->getQueryPool(s.pool);
+    if (!qp || !qp->heap || !qp->resolved)
+      continue;
+    const uint32_t count = s.hi - s.lo + 1;
+    cb->resolveCounterHeap(
+        qp->heap.get(),
+        NS::Range(s.lo, count),
+        MTL4::BufferRange(qp->resolved->gpuAddress() + uint64_t(s.lo) * sizeof(uint64_t), uint64_t(count) * sizeof(uint64_t)),
+        nullptr,
+        nullptr);
+  }
+#endif
+  timestampSpans_.clear();
 }
 
 void CommandBuffer::cmdPushDebugGroupLabel(const char* label, uint32_t) const {
@@ -3097,6 +3282,26 @@ void MetalValidatedCommandBuffer::cmdBuildIndirectTLAS(lvk::AccelStructHandle tl
             instanceCount);
   }
   CommandBuffer::cmdBuildIndirectTLAS(tlas, instanceDescriptors, instanceCount, instanceCountBuffer);
+}
+
+void MetalValidatedCommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) {
+  const MetalAccelStruct* as = context()->getAccelStruct(handle);
+  const MetalBuffer* src = context()->getBuffer(instancesBuffer);
+  if (as && as->type == AccelStructType_TLAS && !as->indirectTLAS) {
+    if (!src || !src->buffer) {
+      LLOGW("validation: cmdUpdateTLAS requires a valid instances buffer");
+    } else {
+      if (src->buffer->storageMode() != MTL::StorageModeShared)
+        LLOGW("validation: cmdUpdateTLAS instances buffer must be StorageType_HostVisible (it is translated on the CPU)");
+      const uint64_t needed = uint64_t(as->numInstances) * sizeof(AccelStructInstance);
+      if (src->size < needed)
+        LLOGW("validation: cmdUpdateTLAS instances buffer is %zu bytes but %llu are needed for %u instances",
+              src->size,
+              (unsigned long long)needed,
+              as->numInstances);
+    }
+  }
+  CommandBuffer::cmdUpdateTLAS(handle, instancesBuffer);
 }
 
 IMetalCommandBuffer& MetalValidatedContext::acquireMetalCommandBuffer(bool) {

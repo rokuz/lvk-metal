@@ -38,6 +38,7 @@ struct PC {
   DrawData* drawData;
   Material* materials;
   uint firstDrawData;
+  uint sampler;
 };
 
 [[vk::push_constant]] PC pc;
@@ -67,7 +68,7 @@ V2F sunVertexMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 [shader("fragment")]
 float4 sunFragmentMain(V2F input) : SV_Target {
   float2 t = float2(cos(0.05 * input.v_Time));
-  float3 K1 = textureBindless2D(input.v_Texture0, 0, sin(input.v_TexCoord + t)).rgb;
-  float3 K2 = textureBindless2D(input.v_Texture1, 0, input.v_TexCoord - 2.0 * t).rgb;
+  float3 K1 = textureBindless2D(input.v_Texture0, pc.sampler, sin(input.v_TexCoord + t)).rgb;
+  float3 K2 = textureBindless2D(input.v_Texture1, pc.sampler, input.v_TexCoord - 2.0 * t).rgb;
   return float4(K1 * K2, 1.0);
 }

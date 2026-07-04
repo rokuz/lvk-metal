@@ -3,6 +3,7 @@ import lvk_metal_bindless;
 struct CubePush {
   float4x4 mvp;
   uint texture0;
+  uint sampler0;
 };
 
 [[vk::push_constant]] CubePush pc;
@@ -24,5 +25,5 @@ MeshOut meshVertexMain(uint vid : SV_VertexID) {
 
 [shader("fragment")]
 float4 meshFragmentMain(MeshOut input) : SV_Target {
-  return textureBindlessCube(pc.texture0, 0, normalize(input.dir));
+  return textureBindlessCube(pc.texture0, pc.sampler0, normalize(input.dir));
 }

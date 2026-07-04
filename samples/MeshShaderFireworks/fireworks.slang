@@ -18,6 +18,7 @@ struct PushConstants {
   PerFrame* perFrame;
   Vertex* vb;
   uint texture;
+  uint sampler;
 };
 
 [[vk::push_constant]] PushConstants pc;
@@ -68,6 +69,6 @@ void meshMain(uint3 groupID : SV_GroupID,
 
 [shader("fragment")]
 float4 fragmentMain(MeshOutput input) : SV_Target {
-  const float alpha = textureBindless2D(pc.texture, 0, input.uv).r;
+  const float alpha = textureBindless2D(pc.texture, pc.sampler, input.uv).r;
   return float4(input.color, alpha);
 }

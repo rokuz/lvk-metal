@@ -36,6 +36,7 @@ struct MetalImage {
   MTL::PixelFormat format = MTL::PixelFormatInvalid;
   uint32_t width = 0;
   uint32_t height = 0;
+  uint32_t depth = 1;
   bool isSwapchainImage = false;
 };
 
@@ -56,6 +57,7 @@ struct MetalSampler {
 
 struct MetalQueryPool {
   NS::SharedPtr<MTL4::CounterHeap> heap;
+  NS::SharedPtr<MTL::Buffer> resolved;
   uint32_t count = 0;
 };
 
@@ -101,6 +103,8 @@ struct MetalMachineLearningPipeline {
   NS::SharedPtr<MTL::Heap> intermediatesHeap;
   NS::SharedPtr<MTL::Library> library;
   NS::SharedPtr<MTL4::ArgumentTable> argTable;
+  uint32_t numInputs = 0;
+  uint32_t numOutputs = 0;
 };
 
 struct MetalArgumentTable {
@@ -249,7 +253,11 @@ class CommandBuffer : public IMetalCommandBuffer {
   void cmdBindTilePipeline(TilePipelineHandle pipeline) override;
   void cmdDispatchTile() override;
 
-  void cmdBindMachineLearningPipeline(MLPipelineHandle pipeline) override;
+  void cmdBindMachineLearningPipeline(MLPipelineHandle pipeline,
+                                      const TensorHandle* inputs,
+                                      uint32_t numInputs,
+                                      const TensorHandle* outputs,
+                                      uint32_t numOutputs) override;
   void cmdDispatchNetwork() override;
 
  protected:
@@ -266,6 +274,14 @@ class CommandBuffer : public IMetalCommandBuffer {
   MTL4::ComputeCommandEncoder* beginTransferEncoder();
   void applyDepthStencilState();
   void applyDepthBias();
+  void resolveTimestamps();
+
+  struct TimestampSpan {
+    QueryPoolHandle pool;
+    uint32_t lo;
+    uint32_t hi;
+  };
+  std::vector<TimestampSpan> timestampSpans_;
 
   MetalContext* ctx_ = nullptr;
   const MetalImmediateCommands::CommandBufferWrapper* wrapper_ = nullptr;
@@ -273,7 +289,6 @@ class CommandBuffer : public IMetalCommandBuffer {
   MTL4::ComputeCommandEncoder* computeEncoder_ = nullptr;
   MTL4::MachineLearningCommandEncoder* mlEncoder_ = nullptr;
   const MetalMachineLearningPipeline* mlPipeline_ = nullptr;
-  bool pendingMLBarrier_ = false;
   MTL::Size computeThreadgroupSize_ = MTL::Size(16, 16, 1);
   MTL::Size meshObjectThreadsPerThreadgroup_ = MTL::Size(1, 1, 1);
   MTL::Size meshThreadsPerThreadgroup_ = MTL::Size(1, 1, 1);
@@ -331,11 +346,22 @@ class MetalContext : public IMetalContext {
   uint32_t pushConstantsSize() const {
     return pushConstantsSize_;
   }
+  uint8_t* pushConstantsShadow() {
+    return pushConstantsShadow_.data();
+  }
   const GpuLimits& limits() const {
     return limits_;
   }
   void setRenderEncoderOpen(bool open) {
     renderEncoderOpen_ = open;
+  }
+  void setPendingMLBarrier(bool pending) {
+    pendingMLBarrier_ = pending;
+  }
+  bool takePendingMLBarrier() {
+    const bool pending = pendingMLBarrier_;
+    pendingMLBarrier_ = false;
+    return pending;
   }
 
   [[nodiscard]] bool initialize(CA::MetalLayer* layer, uint32_t width, uint32_t height, const ContextConfig& cfg);
@@ -433,6 +459,10 @@ class MetalContext : public IMetalContext {
     return qp ? qp->heap.get() : nullptr;
   }
 
+  const MetalQueryPool* getQueryPool(QueryPoolHandle handle) const {
+    return queryPools_.get(handle);
+  }
+
   const MetalImage* getImage(TextureHandle handle) const {
     return textures_.get(handle);
   }
@@ -466,10 +496,7 @@ class MetalContext : public IMetalContext {
   ArgumentTableHandle defaultArgumentTable() const {
     return defaultArgumentTable_;
   }
-  MTL::GPUAddress writePushConstants(const void* data,
-                                     size_t size,
-                                     size_t offset,
-                                     const MetalImmediateCommands::CommandBufferWrapper* wrapper);
+  MTL::GPUAddress writePushConstants(const void* data, size_t size, const MetalImmediateCommands::CommandBufferWrapper* wrapper);
   MTL::DepthStencilState* getDepthStencilState(const DepthState& depth, const StencilState& front, const StencilState& back);
 
   struct StagingAlloc {
@@ -479,6 +506,12 @@ class MetalContext : public IMetalContext {
   StagingAlloc writeUploadStaging(const void* data, size_t size, const MetalImmediateCommands::CommandBufferWrapper* wrapper);
 
   void encodeIndirectDraws(const Dependencies& deps, const MetalImmediateCommands::CommandBufferWrapper* wrapper);
+  void encodeBufferFill(MTL4::ComputeCommandEncoder* enc,
+                        const MetalBuffer* b,
+                        size_t offset,
+                        size_t size,
+                        uint32_t data,
+                        const MetalImmediateCommands::CommandBufferWrapper* wrapper);
 
  protected:
   const MetalImmediateCommands::CommandBufferWrapper* beginCommandBuffer();
@@ -490,6 +523,7 @@ class MetalContext : public IMetalContext {
 
  private:
   bool ensureIndirectEncoder();
+  bool ensureFillPipeline();
   void createIndirectCommandBufferFor(MetalBuffer& mb, uint32_t elementStride);
   void growUploadRing(uint32_t minRegionBytes, const MetalImmediateCommands::CommandBufferWrapper* wrapper);
   void generateMipmapImmediate(MTL::Texture* texture);
@@ -507,6 +541,7 @@ class MetalContext : public IMetalContext {
   void growConstantsRing(const MetalImmediateCommands::CommandBufferWrapper* wrapper);
   void addResident(const MTL::Allocation* allocation);
   void removeResident(const MTL::Allocation* allocation);
+  void retireResident(NS::SharedPtr<MTL::Buffer> buffer);
   void flushResidency();
   void deferredTask(std::function<void()>&& task);
   void processDeferredTasks();
@@ -520,6 +555,7 @@ class MetalContext : public IMetalContext {
   std::unique_ptr<MetalImmediateCommands> immediate_;
   std::unique_ptr<MetalStagingDevice> staging_;
   bool renderEncoderOpen_ = false;
+  bool pendingMLBarrier_ = false;
 
   CA::MetalLayer* metalLayer_ = nullptr;
   NS::AutoreleasePool* autoreleasePool_ = nullptr;
@@ -554,6 +590,7 @@ class MetalContext : public IMetalContext {
   uint32_t pushesPerFrameCapacity_ = 256;
   uint32_t constantsFrameRegionBytes_ = 0;
   uint32_t constantsCursor_ = 0;
+  std::vector<uint8_t> pushConstantsShadow_;
 
   NS::SharedPtr<MTL::Buffer> uploadRing_;
   uint32_t uploadRingFrameRegionBytes_ = 0;
@@ -568,12 +605,8 @@ class MetalContext : public IMetalContext {
   NS::SharedPtr<MTL::ComputePipelineState> icbEncodeMesh_;
   NS::SharedPtr<MTL4::ArgumentTable> icbEncodeArgTable_;
 
-  struct RetiredBuffer {
-    NS::SharedPtr<MTL::Buffer> buffer;
-    SubmitHandle handle;
-  };
-  std::vector<RetiredBuffer> retiredConstantRings_;
-  std::vector<RetiredBuffer> retiredUploadRings_;
+  NS::SharedPtr<MTL::ComputePipelineState> fillPipeline_;
+  NS::SharedPtr<MTL4::ArgumentTable> fillArgTable_;
 
   struct DeferredTask {
     std::function<void()> task_;
@@ -625,6 +658,7 @@ class MetalValidatedCommandBuffer final : public CommandBuffer {
                             lvk::BufferHandle instanceDescriptors,
                             uint32_t instanceCount,
                             lvk::BufferHandle instanceCountBuffer = {}) override;
+  void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
 };
 
 class MetalValidatedContext final : public MetalContext {

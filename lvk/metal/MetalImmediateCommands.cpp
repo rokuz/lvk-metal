@@ -58,7 +58,7 @@ const MetalImmediateCommands::CommandBufferWrapper& MetalImmediateCommands::acqu
 
   CommandBufferWrapper* current = nullptr;
   for (CommandBufferWrapper& buf : buffers_) {
-    if (!buf.isEncoding && !buf.isPending && !buf.isDeferred) {
+    if (!buf.isEncoding && !buf.isPending) {
       current = &buf;
       break;
     }
@@ -100,39 +100,6 @@ SubmitHandle MetalImmediateCommands::submit(const CommandBufferWrapper& wrapper)
     submitCounter_ = 1;
 
   return lastSubmitHandle_;
-}
-
-SubmitHandle MetalImmediateCommands::submitDeferred(const CommandBufferWrapper& wrapper) {
-  CommandBufferWrapper& buf = buffers_[wrapper.bufferIndex];
-  LVK_ASSERT(buf.isEncoding);
-
-  buf.cmdBuf->endCommandBuffer();
-
-  buf.handle = makeSubmitHandle(submitCounter_, buf.bufferIndex);
-  buf.lastSubmitValue = submitCounter_;
-  buf.isEncoding = false;
-  buf.isDeferred = true;
-
-  deferred_.push_back(buf.bufferIndex);
-
-  submitCounter_++;
-  if (submitCounter_ == 0)
-    submitCounter_ = 1;
-
-  return buf.handle;
-}
-
-void MetalImmediateCommands::flushDeferred() {
-  for (uint32_t idx : deferred_) {
-    CommandBufferWrapper& buf = buffers_[idx];
-    MTL4::CommandBuffer* cb = buf.cmdBuf.get();
-    queue_->commit(&cb, 1);
-    queue_->signalEvent(event_.get(), buf.lastSubmitValue);
-    buf.isDeferred = false;
-    buf.isPending = true;
-    lastSubmitHandle_ = buf.handle;
-  }
-  deferred_.clear();
 }
 
 bool MetalImmediateCommands::isReady(SubmitHandle handle) const {

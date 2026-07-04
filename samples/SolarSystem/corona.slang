@@ -38,6 +38,7 @@ struct PC {
   DrawData* drawData;
   Material* materials;
   uint firstDrawData;
+  uint sampler;
 };
 
 [[vk::push_constant]] PC pc;
@@ -70,7 +71,7 @@ V2F coronaVertexMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 
 [shader("fragment")]
 float4 coronaFragmentMain(V2F input) : SV_Target {
-  float4 K1 = textureBindless2D(input.v_Texture0, 0, input.v_TexCoord);
+  float4 K1 = textureBindless2D(input.v_Texture0, pc.sampler, input.v_TexCoord);
   K1.a = dot(K1.xyz, float3(0.333, 0.333, 0.333));
   return K1;
 }

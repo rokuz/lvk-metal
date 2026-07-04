@@ -81,11 +81,13 @@ struct PC {
   device const DrawData* drawData;
   device const Material* materials;
   uint firstDrawData;
+  uint sampler;
 };
 
 struct SkyPC {
   device const PerFrame* perFrame;
   uint texCube;
+  uint sampler;
 };
 
 struct DefaultOut {
@@ -113,8 +115,8 @@ vertex DefaultOut defaultVertexMain(uint vid [[vertex_id]], uint iid [[instance_
 
 fragment float4 defaultFragmentMain(DefaultOut in [[stage_in]], constant PC& pc [[buffer(0)]], LVK_BINDLESS_ARGS) {
   const Material m = pc.materials[in.materialIndex];
-  const float4 Ke = m.emissive * textureBindless2D(m.texEmissive, 0, in.uv);
-  const float4 Kd = m.diffuse * textureBindless2D(m.texDiffuse, 0, in.uv);
+  const float4 Ke = m.emissive * textureBindless2D(m.texEmissive, pc.sampler, in.uv);
+  const float4 Kd = m.diffuse * textureBindless2D(m.texDiffuse, pc.sampler, in.uv);
   const float3 lightPos = float3(0.0);
   const float lightRadius = 10.0;
   const bool twoSided = m.diffuse.w > 0.5;
@@ -134,6 +136,7 @@ struct SunOut {
   float time;
   uint tex0 [[flat]];
   uint tex1 [[flat]];
+  uint sampler [[flat]];
 };
 
 vertex SunOut sunVertexMain(uint vid [[vertex_id]], uint iid [[instance_id]], constant PC& pc [[buffer(0)]]) {
@@ -146,13 +149,14 @@ vertex SunOut sunVertexMain(uint vid [[vertex_id]], uint iid [[instance_id]], co
   o.time = pc.perFrame->time;
   o.tex0 = m.texEmissive;
   o.tex1 = m.texDiffuse;
+  o.sampler = pc.sampler;
   return o;
 }
 
 fragment float4 sunFragmentMain(SunOut in [[stage_in]], LVK_BINDLESS_ARGS) {
   const float2 t = float2(cos(0.05 * in.time));
-  const float3 K1 = textureBindless2D(in.tex0, 0, sin(in.uv + t)).rgb;
-  const float3 K2 = textureBindless2D(in.tex1, 0, in.uv - 2.0 * t).rgb;
+  const float3 K1 = textureBindless2D(in.tex0, in.sampler, sin(in.uv + t)).rgb;
+  const float3 K2 = textureBindless2D(in.tex1, in.sampler, in.uv - 2.0 * t).rgb;
   return float4(K1 * K2, 1.0);
 }
 
@@ -160,6 +164,7 @@ struct CoronaOut {
   float4 position [[position]];
   float2 uv;
   uint tex0 [[flat]];
+  uint sampler [[flat]];
 };
 
 vertex CoronaOut coronaVertexMain(uint vid [[vertex_id]], uint iid [[instance_id]], constant PC& pc [[buffer(0)]]) {
@@ -174,11 +179,12 @@ vertex CoronaOut coronaVertexMain(uint vid [[vertex_id]], uint iid [[instance_id
   o.position = pc.perFrame->proj * mv * float4(v, 1.0);
   o.uv = uv;
   o.tex0 = pc.materials[dd.idMaterial].texEmissive;
+  o.sampler = pc.sampler;
   return o;
 }
 
 fragment float4 coronaFragmentMain(CoronaOut in [[stage_in]], LVK_BINDLESS_ARGS) {
-  float4 K1 = textureBindless2D(in.tex0, 0, in.uv);
+  float4 K1 = textureBindless2D(in.tex0, in.sampler, in.uv);
   K1.a = dot(K1.xyz, float3(0.333, 0.333, 0.333));
   return K1;
 }
@@ -220,7 +226,7 @@ vertex SkyOut skyVertexMain(uint vid [[vertex_id]], constant SkyPC& pc [[buffer(
 }
 
 fragment float4 skyFragmentMain(SkyOut in [[stage_in]], constant SkyPC& pc [[buffer(0)]], LVK_BINDLESS_ARGS) {
-  return pow(textureBindlessCube(pc.texCube, 0, in.dir), float4(1.5, 1.5, 1.5, 1.5));
+  return pow(textureBindlessCube(pc.texCube, pc.sampler, in.dir), float4(1.5, 1.5, 1.5, 1.5));
 }
 )";
 
@@ -446,7 +452,7 @@ class SolarSystem final : public lvk::metal::ISample {
     mat4* normal = reinterpret_cast<mat4*>(ptrNormal_[r]);
     for (size_t i = 0; i != scene_.meshes.size(); ++i) {
       model[i] = scene_.meshes[i].sceneNode->global;
-      normal[i] = glm::transpose(glm::inverse(model[i]));
+      normal[i] = model[i];
     }
 
     const float aspect = float(width_) / float(height_);
@@ -466,6 +472,7 @@ class SolarSystem final : public lvk::metal::ISample {
       uint64_t drawData;
       uint64_t materials;
       uint32_t firstDrawData;
+      uint32_t sampler;
     } pc = {
         .verts = addrVertices_,
         .model = addrModel_[r],
@@ -474,6 +481,7 @@ class SolarSystem final : public lvk::metal::ISample {
         .drawData = addrDrawData_,
         .materials = addrMaterials_,
         .firstDrawData = 0,
+        .sampler = sampler_.index(),
     };
 
     const lvk::Framebuffer fb = {.color = {{.texture = target}}, .depthStencil = {.texture = depth_}};
@@ -496,7 +504,8 @@ class SolarSystem final : public lvk::metal::ISample {
     const struct {
       uint64_t perFrame;
       uint32_t texCube;
-    } skyPush = {.perFrame = addrPerFrame_[r], .texCube = skyTex_.index()};
+      uint32_t sampler;
+    } skyPush = {.perFrame = addrPerFrame_[r], .texCube = skyTex_.index(), .sampler = sampler_.index()};
     cmd.cmdPushConstants(skyPush);
     cmd.cmdDraw(36);
 

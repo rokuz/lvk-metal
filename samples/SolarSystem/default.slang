@@ -38,6 +38,7 @@ struct PC {
   DrawData* drawData;
   Material* materials;
   uint firstDrawData;
+  uint sampler;
 };
 
 [[vk::push_constant]] PC pc;
@@ -82,8 +83,8 @@ float pointLight(float3 lightPos, float lightRadius, float3 worldPos, float3 wor
 [shader("fragment")]
 float4 defaultFragmentMain(V2F input) : SV_Target {
   Material m = pc.materials[input.v_MaterialIndex];
-  float4 Ke = m.emissive * textureBindless2D(m.texEmissive, 0, input.v_TexCoord);
-  float4 Kd = m.diffuse * textureBindless2D(m.texDiffuse, 0, input.v_TexCoord);
+  float4 Ke = m.emissive * textureBindless2D(m.texEmissive, pc.sampler, input.v_TexCoord);
+  float4 Kd = m.diffuse * textureBindless2D(m.texDiffuse, pc.sampler, input.v_TexCoord);
   const float3 lightPos = float3(0.0, 0.0, 0.0);
   const float4 lightColor = float4(1.0, 1.0, 1.0, 1.0);
   const float lightRadius = 10.0;

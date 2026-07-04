@@ -46,6 +46,7 @@ fragment float4 triFragmentMain(TriOut in [[stage_in]]) {
 struct CubePush {
   float4x4 mvp;
   uint texture0;
+  uint sampler0;
 };
 
 struct MeshOut {
@@ -66,7 +67,7 @@ vertex MeshOut meshVertexMain(uint vid [[vertex_id]], constant CubePush& pc [[bu
 }
 
 fragment float4 meshFragmentMain(MeshOut in [[stage_in]], constant CubePush& pc [[buffer(0)]], LVK_BINDLESS_ARGS) {
-  return textureBindlessCube(pc.texture0, 0, normalize(in.dir));
+  return textureBindlessCube(pc.texture0, pc.sampler0, normalize(in.dir));
 }
 )";
 
@@ -185,7 +186,8 @@ class RenderToCubeMap final : public lvk::metal::ISample {
     const struct {
       glm::mat4 mvp;
       uint32_t texture;
-    } meshPush = {.mvp = proj * view * model, .texture = cubeMap_.index()};
+      uint32_t sampler;
+    } meshPush = {.mvp = proj * view * model, .texture = cubeMap_.index(), .sampler = linearSampler_.index()};
     cmd.cmdPushConstants(meshPush);
     cmd.cmdDrawIndexed(36);
     cmd.cmdPopDebugGroupLabel();

@@ -11,21 +11,35 @@ inline uint32_t bytesPerMetalPixel(MTL::PixelFormat fmt) {
   switch (fmt) {
   case MTL::PixelFormatR8Unorm:
   case MTL::PixelFormatR8Uint:
+  case MTL::PixelFormatA8Unorm:
+  case MTL::PixelFormatStencil8:
     return 1;
   case MTL::PixelFormatR16Float:
   case MTL::PixelFormatR16Unorm:
+  case MTL::PixelFormatR16Uint:
   case MTL::PixelFormatRG8Unorm:
+  case MTL::PixelFormatDepth16Unorm:
     return 2;
   case MTL::PixelFormatRGBA8Unorm:
   case MTL::PixelFormatRGBA8Unorm_sRGB:
   case MTL::PixelFormatBGRA8Unorm:
   case MTL::PixelFormatBGRA8Unorm_sRGB:
   case MTL::PixelFormatRG16Float:
+  case MTL::PixelFormatRG16Unorm:
+  case MTL::PixelFormatRG16Uint:
   case MTL::PixelFormatR32Float:
+  case MTL::PixelFormatR32Uint:
+  case MTL::PixelFormatRGB10A2Unorm:
+  case MTL::PixelFormatDepth32Float:
+  case MTL::PixelFormatDepth24Unorm_Stencil8:
     return 4;
   case MTL::PixelFormatRGBA16Float:
+  case MTL::PixelFormatRG32Float:
+  case MTL::PixelFormatRG32Uint:
+  case MTL::PixelFormatDepth32Float_Stencil8:
     return 8;
   case MTL::PixelFormatRGBA32Float:
+  case MTL::PixelFormatRGBA32Uint:
     return 16;
   default:
     return 4;
@@ -122,7 +136,6 @@ inline MTL::PixelFormat toMTLPixelFormat(Format format) {
   case Format_Z_F32:
     return MTL::PixelFormatDepth32Float;
   case Format_Z_UN24_S_UI8:
-    return MTL::PixelFormatDepth24Unorm_Stencil8;
   case Format_Z_F32_S_UI8:
     return MTL::PixelFormatDepth32Float_Stencil8;
   default:

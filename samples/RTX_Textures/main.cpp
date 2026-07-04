@@ -210,7 +210,7 @@ class RTXTextures final : public lvk::metal::ISample {
     present_ = ctx.createRenderPipeline({
         .smVert = presentVert,
         .smFrag = presentFrag,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .color = {{.format = ctx.getSwapchainFormat()}},
         .debugName = "Pipeline: present",
     });
   }
@@ -361,7 +361,7 @@ class RTXTextures final : public lvk::metal::ISample {
         .geometryType = lvk::AccelStructGeomType_Instances,
         .instancesBuffer = instances_,
         .buildRange = {.primitiveCount = 2},
-        .buildFlags = lvk::AccelStructBuildFlagBits_PreferFastTrace | lvk::AccelStructBuildFlagBits_AllowUpdate,
+        .buildFlags = lvk::AccelStructBuildFlagBits_PreferFastTrace,
         .debugName = "TLAS",
     });
   }

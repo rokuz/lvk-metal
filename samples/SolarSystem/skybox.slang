@@ -9,6 +9,7 @@ struct PerFrame {
 struct PC {
   PerFrame* perFrame;
   uint texCube;
+  uint sampler;
 };
 
 [[vk::push_constant]] PC pc;
@@ -53,5 +54,5 @@ V2F skyVertexMain(uint vid : SV_VertexID) {
 
 [shader("fragment")]
 float4 skyFragmentMain(V2F input) : SV_Target {
-  return pow(textureBindlessCube(pc.texCube, 0, input.dir), float4(1.5, 1.5, 1.5, 1.5));
+  return pow(textureBindlessCube(pc.texCube, pc.sampler, input.dir), float4(1.5, 1.5, 1.5, 1.5));
 }

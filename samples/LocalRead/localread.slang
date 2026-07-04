@@ -11,6 +11,7 @@ struct PerFrame {
   uint texAlbedo;
   uint texNormal;
   uint texHeight;
+  uint sampler;
 };
 
 struct DeferredPC {
@@ -88,14 +89,14 @@ float3x3 cotangentFrame(float3 N, float3 p, float2 uv) {
   return float3x3(T, B, N);
 }
 
-float2 parallaxUV(float2 uv, float3 viewTS, uint heightId) {
+float2 parallaxUV(float2 uv, float3 viewTS, uint heightId, uint samplerId) {
   const float layerStep = 1.0 / float(kParallaxSteps);
   const float invViewZ = 1.0 / max(viewTS.z, 0.01);
   const float2 deltaUV = viewTS.xy * (invViewZ * kHeightScale * layerStep);
 
   float2 cur = uv;
   float curLayer = 0.0;
-  float curDepth = 1.0 - textureBindless2DLod(heightId, 0, cur, 0.0).r;
+  float curDepth = 1.0 - textureBindless2DLod(heightId, samplerId, cur, 0.0).r;
   float2 prevCur = cur;
   float prevLayer = curLayer;
   float prevDepth = curDepth;
@@ -103,13 +104,13 @@ float2 parallaxUV(float2 uv, float3 viewTS, uint heightId) {
   [loop] for (int i = 0; i < kParallaxSteps && curLayer < curDepth; ++i) {
     prevCur = cur; prevLayer = curLayer; prevDepth = curDepth;
     cur -= deltaUV; curLayer += layerStep;
-    curDepth = 1.0 - textureBindless2DLod(heightId, 0, cur, 0.0).r;
+    curDepth = 1.0 - textureBindless2DLod(heightId, samplerId, cur, 0.0).r;
   }
 
   [unroll] for (int k = 0; k < 3; ++k) {
     const float2 midCur = 0.5 * (prevCur + cur);
     const float midLayer = 0.5 * (prevLayer + curLayer);
-    const float midDepth = 1.0 - textureBindless2DLod(heightId, 0, midCur, 0.0).r;
+    const float midDepth = 1.0 - textureBindless2DLod(heightId, samplerId, midCur, 0.0).r;
     const bool advance = midLayer < midDepth;
     prevCur = advance ? midCur : prevCur;
     prevLayer = advance ? midLayer : prevLayer;
@@ -121,7 +122,8 @@ float2 parallaxUV(float2 uv, float3 viewTS, uint heightId) {
 
   const float after = curDepth - curLayer;
   const float before = prevDepth - prevLayer;
-  const float weight = after / (after - before);
+  const float denom = after - before;
+  const float weight = abs(denom) < 1e-6 ? 0.0 : clamp(after / denom, 0.0, 1.0);
   return lerp(cur, prevCur, weight);
 }
 
@@ -131,13 +133,13 @@ GBufferOut deferredFragmentMain(DeferredOut input) {
   const float3 V = normalize(input.eyeDir);
   const float3x3 TBN = cotangentFrame(N, input.worldPos, input.uv);
   const float3 viewTS = mul(TBN, V);
-  const float2 uv = parallaxUV(input.uv, viewTS, pc.perFrame.texHeight);
+  const float2 uv = parallaxUV(input.uv, viewTS, pc.perFrame.texHeight, pc.perFrame.sampler);
 
-  const float3 nm = textureBindless2D(pc.perFrame.texNormal, 0, uv).xyz * 2.0 - 1.0;
+  const float3 nm = textureBindless2D(pc.perFrame.texNormal, pc.perFrame.sampler, uv).xyz * 2.0 - 1.0;
   const float3 n = normalize(mul(nm, TBN));
 
   GBufferOut o;
-  o.albedo = 10.0 * textureBindless2D(pc.perFrame.texAlbedo, 0, uv);
+  o.albedo = 10.0 * textureBindless2D(pc.perFrame.texAlbedo, pc.perFrame.sampler, uv);
   o.normal = float4(n * 0.5 + 0.5, 1.0);
   o.worldPos = float4(input.worldPos, 1.0);
   return o;

@@ -296,7 +296,7 @@ class RTXBistro final : public lvk::metal::ISample {
     present_ = ctx.createRenderPipeline({
         .smVert = presentVert,
         .smFrag = presentFrag,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .color = {{.format = ctx.getSwapchainFormat()}},
         .debugName = "Pipeline: present",
     });
   }

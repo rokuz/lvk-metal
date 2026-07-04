@@ -61,6 +61,7 @@ struct MainPC {
   device const Vertex* vb;
   float shadowFar;
   uint shadowMap;
+  uint sampler;
 };
 
 struct MainOut {
@@ -95,7 +96,7 @@ fragment float4 meshFragmentMain(MainOut in [[stage_in]], constant MainPC& pc [[
   const float curD = dist - 0.1;
   float factor = 0.0;
   for (int i = 0; i < 9; ++i) {
-    const float d = textureBindlessCube(pc.shadowMap, 0, base + k * offsets[i]).r;
+    const float d = textureBindlessCube(pc.shadowMap, pc.sampler, base + k * offsets[i]).r;
     factor += curD > pc.shadowFar * d ? 0.0 : 1.0;
   }
   factor /= 9.0;
@@ -273,7 +274,8 @@ class OmniShadows final : public lvk::metal::ISample {
                          .lightPos = vec4(lightPos, 1.0f),
                          .vb = ctx_->gpuAddress(vb_),
                          .shadowFar = shadowFar,
-                         .shadowMap = shadowColor_.index()};
+                         .shadowMap = shadowColor_.index(),
+                         .sampler = sampler_.index()};
       cmd.cmdPushConstants(pc);
     }
     cmd.cmdDraw(vertexCount_);
@@ -317,6 +319,7 @@ class OmniShadows final : public lvk::metal::ISample {
     uint64_t vb;
     float shadowFar;
     uint32_t shadowMap;
+    uint32_t sampler;
   };
 
   static constexpr uint32_t kShadowSize = 1024;

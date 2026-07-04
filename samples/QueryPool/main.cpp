@@ -40,7 +40,9 @@ class QueryPool final : public lvk::metal::ISample {
     width_ = width;
     height_ = height;
 
-    queryPool_ = ctx.createQueryPool(2, "queryPoolTimestamps");
+    LVK_ASSERT(ctx.getNumSwapchainImages() <= kRing);
+    for (uint32_t i = 0; i < kRing; ++i)
+      queryPools_[i] = ctx.createQueryPool(2, "queryPoolTimestamps");
     toMs_ = ctx.getTimestampPeriodToMs();
 
     lvk::Holder<lvk::ShaderModuleHandle> vert;
@@ -73,28 +75,32 @@ class QueryPool final : public lvk::metal::ISample {
   }
 
   void render(lvk::ICommandBuffer& cmd, lvk::TextureHandle target, float) override {
-    if (frame_ > 0) {
+    const lvk::QueryPoolHandle pool = queryPools_[frame_ % kRing];
+
+    if (frame_ >= kRing) {
       uint64_t ts[2] = {0, 0};
-      if (ctx_->getQueryPoolResults(queryPool_, 0, 2, sizeof(ts), ts, sizeof(ts[0])) && ts[1] >= ts[0])
+      if (ctx_->getQueryPoolResults(pool, 0, 2, sizeof(ts), ts, sizeof(ts[0])) && ts[1] >= ts[0])
         LLOGL("QueryPool: GPU pass time = %.4f ms (ticks %llu -> %llu)\n", double(ts[1] - ts[0]) * toMs_, ts[0], ts[1]);
     }
 
-    cmd.cmdResetQueryPool(queryPool_, 0, 2);
-    cmd.cmdWriteTimestamp(queryPool_, 0);
+    cmd.cmdResetQueryPool(pool, 0, 2);
+    cmd.cmdWriteTimestamp(pool, 0);
     cmd.cmdBeginRendering({.color = {{.loadOp = lvk::LoadOp_Clear, .storeOp = lvk::StoreOp_Store, .clearColor = {0, 0, 0, 1}}}},
                           {.color = {{.texture = target}}});
     cmd.cmdBindViewport({.width = float(width_), .height = float(height_)});
     cmd.cmdBindRenderPipeline(pipeline_);
     cmd.cmdDraw(4);
     cmd.cmdEndRendering();
-    cmd.cmdWriteTimestamp(queryPool_, 1);
+    cmd.cmdWriteTimestamp(pool, 1);
     ++frame_;
   }
 
  private:
+  static constexpr uint32_t kRing = 3;
+
   lvk::metal::IMetalContext* ctx_ = nullptr;
   lvk::Holder<lvk::RenderPipelineHandle> pipeline_;
-  lvk::Holder<lvk::QueryPoolHandle> queryPool_;
+  lvk::Holder<lvk::QueryPoolHandle> queryPools_[kRing];
   double toMs_ = 0.0;
   uint32_t frame_ = 0;
   uint32_t width_ = 0;

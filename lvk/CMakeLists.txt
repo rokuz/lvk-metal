@@ -7,6 +7,10 @@ target_include_directories(lvk-metal PUBLIC "${LVK_METAL_ROOT}" "${LVK_METAL_MET
 
 target_compile_definitions(lvk-metal PRIVATE "$<TARGET_PROPERTY:LVKLibrary,INTERFACE_COMPILE_DEFINITIONS>")
 
+if(LVK_METAL_DISABLE_GPU_COUNTERS)
+  target_compile_definitions(lvk-metal PRIVATE LVK_METAL_DISABLE_GPU_COUNTERS)
+endif()
+
 if(APPLE)
   target_link_libraries(lvk-metal PUBLIC "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework Cocoa"
                                          "-framework MetalKit" "-framework CoreGraphics")

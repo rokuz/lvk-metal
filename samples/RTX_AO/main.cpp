@@ -568,7 +568,7 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
     present_ = ctx.createRenderPipeline({
         .smVert = presentVert,
         .smFrag = presentFrag,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .color = {{.format = ctx.getSwapchainFormat()}},
         .debugName = "Pipeline: present",
     });
 
@@ -591,9 +591,10 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
     const bool look = window_ && mousePressedLeft_ && !ImGui::GetIO().WantCaptureMouse;
     positioner_.update(delta, mousePos_, look);
 
-    if (resetHash_) {
-      std::memset(ctx_->getMappedPtr(hashHi_), 0, hashBytes_);
-      std::memset(ctx_->getMappedPtr(hashLo_), 0, hashBytes_);
+    const bool resetHash = resetHash_;
+    if (resetHash) {
+      cmd.cmdFillBuffer(hashHi_, 0, lvk::LVK_WHOLE_SIZE, 0);
+      cmd.cmdFillBuffer(hashLo_, 0, lvk::LVK_WHOLE_SIZE, 0);
       resetHash_ = false;
     }
 
@@ -662,7 +663,12 @@ class RTXAmbientOcclusion final : public lvk::metal::ISample {
     lvk::TextureHandle aoTarget = half ? aoHalf_ : storageImage_;
     cmd.cmdBindComputePipeline(pipeline_);
     cmd.cmdPushConstants(pc);
-    cmd.cmdTraceRays(half ? width_ / 2 : width_, half ? height_ / 2 : height_, 1, {.storageImages = {aoTarget}});
+    lvk::Dependencies traceDeps = {.storageImages = {aoTarget}};
+    if (resetHash) {
+      traceDeps.buffers[0] = hashHi_;
+      traceDeps.buffers[1] = hashLo_;
+    }
+    cmd.cmdTraceRays(half ? width_ / 2 : width_, half ? height_ / 2 : height_, 1, traceDeps);
 
     const bool ml = mode_ == 2 && upscaler_.valid();
     if (ml)

@@ -86,7 +86,7 @@ class HelloTriangle final : public lvk::metal::ISample {
           .smVert = vert,
           .smFrag = frag,
           .specInfo = spec,
-          .color = {{.format = lvk::Format_BGRA_UN8}},
+          .color = {{.format = ctx.getSwapchainFormat()}},
           .debugName = value == 1 ? "quad" : "triangle",
       });
     };

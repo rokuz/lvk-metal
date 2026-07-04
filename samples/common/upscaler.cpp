@@ -126,7 +126,12 @@ bool Upscaler::init(IMetalContext& ctx, uint32_t fullWidth, uint32_t fullHeight,
   if (!pipeline_.valid())
     return false;
 
-  sampler_ = ctx.createSampler({.debugName = "upscaler.sampler"});
+  sampler_ = ctx.createSampler({
+      .wrapU = lvk::SamplerWrap_Clamp,
+      .wrapV = lvk::SamplerWrap_Clamp,
+      .wrapW = lvk::SamplerWrap_Clamp,
+      .debugName = "upscaler.sampler",
+  });
   lvk::Holder<lvk::ShaderModuleHandle> pack = ctx.createShaderModule({kUpscaleMSL, "packInput", lvk::Stage_Comp, "upscaler.pack"});
   lvk::Holder<lvk::ShaderModuleHandle> combine =
       ctx.createShaderModule({kUpscaleMSL, "combineOutput", lvk::Stage_Comp, "upscaler.combine"});

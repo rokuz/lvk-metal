@@ -58,47 +58,94 @@ void MetalStagingDevice::uploadTexture(MTL::Texture* texture,
   const uint64_t dstBytesPerRow = uint64_t(width) * bpp;
   const uint64_t dstBytesPerImage = dstBytesPerRow * height;
   const uint64_t srcBytesPerRow = uint64_t(bufferRowLength ? bufferRowLength : width) * bpp;
-  const uint64_t storageSize = dstBytesPerImage * depth;
 
-  ensureStagingBufferSize(storageSize);
-  LVK_ASSERT(storageSize <= stagingBufferSize_);
+  ensureStagingBufferSize(std::min<uint64_t>(dstBytesPerImage * depth, maxBufferSize_));
 
-  MemoryRegionDesc desc = getNextFreeOffset(storageSize);
-  if (desc.size_ < storageSize) {
-    waitAndReset();
-    desc = getNextFreeOffset(storageSize);
+  const uint8_t* srcBase = static_cast<const uint8_t*>(data);
+
+  if (srcBytesPerRow == dstBytesPerRow && dstBytesPerImage <= stagingBufferSize_) {
+    const uint32_t planesPerChunk = uint32_t(std::max<uint64_t>(1, stagingBufferSize_ / dstBytesPerImage));
+    for (uint32_t d = 0; d < depth; d += planesPerChunk) {
+      const uint32_t chunkPlanes = std::min<uint32_t>(planesPerChunk, depth - d);
+      const uint64_t chunkBytes = dstBytesPerImage * chunkPlanes;
+
+      MemoryRegionDesc desc = getNextFreeOffset(chunkBytes);
+      if (desc.size_ < chunkBytes) {
+        waitAndReset();
+        desc = getNextFreeOffset(chunkBytes);
+      }
+      LVK_ASSERT(desc.size_ >= chunkBytes);
+
+      std::memcpy(static_cast<uint8_t*>(stagingBuffer_->contents()) + desc.offset_, srcBase + uint64_t(d) * dstBytesPerImage, chunkBytes);
+
+      ctx_.flushResidency();
+
+      const MetalImmediateCommands::CommandBufferWrapper& wrapper = ctx_.immediate_->acquire();
+      MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
+      enc->copyFromBuffer(stagingBuffer_.get(),
+                          desc.offset_,
+                          dstBytesPerRow,
+                          dstBytesPerImage,
+                          MTL::Size(width, height, chunkPlanes),
+                          texture,
+                          slice,
+                          mipLevel,
+                          MTL::Origin(x, y, z + d));
+      enc->barrierAfterStages(
+          MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+      enc->endEncoding();
+
+      desc.handle_ = ctx_.immediate_->submit(wrapper);
+      insertRegion(desc);
+    }
+    return;
   }
-  LVK_ASSERT(desc.size_ >= storageSize);
 
-  uint8_t* dst = static_cast<uint8_t*>(stagingBuffer_->contents()) + desc.offset_;
-  const uint8_t* src = static_cast<const uint8_t*>(data);
-  if (srcBytesPerRow == dstBytesPerRow) {
-    std::memcpy(dst, src, storageSize);
-  } else {
-    for (uint32_t row = 0; row < height * depth; ++row) {
-      std::memcpy(dst + row * dstBytesPerRow, src + row * srcBytesPerRow, dstBytesPerRow);
+  const uint32_t rowsPerChunk =
+      uint32_t(std::min<uint64_t>(height, std::max<uint64_t>(1, stagingBufferSize_ / std::max<uint64_t>(dstBytesPerRow, 1))));
+  for (uint32_t d = 0; d < depth; ++d) {
+    for (uint32_t row = 0; row < height; row += rowsPerChunk) {
+      const uint32_t chunkRows = std::min<uint32_t>(rowsPerChunk, height - row);
+      const uint64_t chunkBytes = uint64_t(chunkRows) * dstBytesPerRow;
+
+      MemoryRegionDesc desc = getNextFreeOffset(chunkBytes);
+      if (desc.size_ < chunkBytes) {
+        waitAndReset();
+        desc = getNextFreeOffset(chunkBytes);
+      }
+      LVK_ASSERT(desc.size_ >= chunkBytes);
+
+      uint8_t* dst = static_cast<uint8_t*>(stagingBuffer_->contents()) + desc.offset_;
+      const uint8_t* src = srcBase + uint64_t(d) * srcBytesPerRow * height + uint64_t(row) * srcBytesPerRow;
+      if (srcBytesPerRow == dstBytesPerRow) {
+        std::memcpy(dst, src, chunkBytes);
+      } else {
+        for (uint32_t r = 0; r < chunkRows; ++r) {
+          std::memcpy(dst + r * dstBytesPerRow, src + r * srcBytesPerRow, dstBytesPerRow);
+        }
+      }
+
+      ctx_.flushResidency();
+
+      const MetalImmediateCommands::CommandBufferWrapper& wrapper = ctx_.immediate_->acquire();
+      MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
+      enc->copyFromBuffer(stagingBuffer_.get(),
+                          desc.offset_,
+                          dstBytesPerRow,
+                          chunkBytes,
+                          MTL::Size(width, chunkRows, 1),
+                          texture,
+                          slice,
+                          mipLevel,
+                          MTL::Origin(x, y + row, z + d));
+      enc->barrierAfterStages(
+          MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
+      enc->endEncoding();
+
+      desc.handle_ = ctx_.immediate_->submit(wrapper);
+      insertRegion(desc);
     }
   }
-
-  ctx_.flushResidency();
-
-  const MetalImmediateCommands::CommandBufferWrapper& wrapper = ctx_.immediate_->acquire();
-  MTL4::ComputeCommandEncoder* enc = wrapper.cmdBuf->computeCommandEncoder();
-  enc->copyFromBuffer(stagingBuffer_.get(),
-                      desc.offset_,
-                      dstBytesPerRow,
-                      dstBytesPerImage,
-                      MTL::Size(width, height, depth),
-                      texture,
-                      slice,
-                      mipLevel,
-                      MTL::Origin(x, y, z));
-  enc->barrierAfterStages(
-      MTL::StageBlit | MTL::StageDispatch, MTL::StageVertex | MTL::StageFragment | MTL::StageDispatch, MTL4::VisibilityOptionDevice);
-  enc->endEncoding();
-
-  desc.handle_ = ctx_.immediate_->submit(wrapper);
-  insertRegion(desc);
 }
 
 void MetalStagingDevice::ensureStagingBufferSize(uint64_t sizeNeeded) {

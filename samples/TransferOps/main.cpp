@@ -80,7 +80,7 @@ class TransferOps final : public lvk::metal::ISample {
     pipeline_ = ctx.createRenderPipeline({
         .smVert = vert,
         .smFrag = frag,
-        .color = {{.format = lvk::Format_BGRA_UN8}},
+        .color = {{.format = ctx.getSwapchainFormat()}},
         .debugName = "transfer",
     });
 

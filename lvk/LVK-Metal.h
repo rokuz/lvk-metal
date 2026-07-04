@@ -154,7 +154,11 @@ class IMetalCommandBuffer : public lvk::ICommandBuffer {
   virtual void cmdBindTilePipeline(TilePipelineHandle pipeline) = 0;
   virtual void cmdDispatchTile() = 0;
 
-  virtual void cmdBindMachineLearningPipeline(MLPipelineHandle pipeline) = 0;
+  virtual void cmdBindMachineLearningPipeline(MLPipelineHandle pipeline,
+                                              const TensorHandle* inputs = nullptr,
+                                              uint32_t numInputs = 0,
+                                              const TensorHandle* outputs = nullptr,
+                                              uint32_t numOutputs = 0) = 0;
   virtual void cmdDispatchNetwork() = 0;
 
   virtual void cmdBuildIndirectTLAS(lvk::AccelStructHandle tlas,

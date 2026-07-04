@@ -96,6 +96,7 @@ struct SkyPC {
 
 struct FullscreenPC {
   uint texture;
+  uint sampler;
 };
 
 float2 unpackSnorm2x8(uint d) {
@@ -228,7 +229,7 @@ vertex FsOut fullscreenVertexMain(uint vid [[vertex_id]]) {
 }
 
 fragment float4 fullscreenFragmentMain(FsOut in [[stage_in]], constant FullscreenPC& pc [[buffer(0)]], LVK_BINDLESS_ARGS) {
-  return textureBindless2D(pc.texture, 0, in.uv);
+  return textureBindless2D(pc.texture, pc.sampler, in.uv);
 }
 
 struct GrayscalePC {
@@ -427,6 +428,7 @@ class Bistro final : public lvk::metal::ISample {
       loaderPool_->wait_for_all();
     }
     processLoadedMaterials();
+    std::memcpy(ctx_->getMappedPtr(sbMaterials_[r]), materials_.data(), sizeof(GpuMaterial) * materials_.size());
 
     struct ScenePC {
       uint64_t perFrame;
@@ -451,7 +453,7 @@ class Bistro final : public lvk::metal::ISample {
     }
 
     const ScenePC scenePC = {
-        ctx_->gpuAddress(ubPerFrame_[r]), ctx_->gpuAddress(ubPerObject_[r]), ctx_->gpuAddress(sbMaterials_), vbAddress_};
+        ctx_->gpuAddress(ubPerFrame_[r]), ctx_->gpuAddress(ubPerObject_[r]), ctx_->gpuAddress(sbMaterials_[r]), vbAddress_};
 
     const bool msaa = samplesCount_ > 1;
     const lvk::TextureHandle msaaColorTex = offscreenColorMSAA_;
@@ -522,7 +524,8 @@ class Bistro final : public lvk::metal::ISample {
     cmd.cmdBindRenderPipeline(pipelineFullscreen_);
     const struct {
       uint32_t texture;
-    } fsPC = {offscreenColor_.index()};
+      uint32_t sampler;
+    } fsPC = {offscreenColor_.index(), sampler_.index()};
     cmd.cmdPushConstants(fsPC);
     cmd.cmdDraw(3);
     imgui_->endFrame(cmd);
@@ -803,11 +806,12 @@ class Bistro final : public lvk::metal::ISample {
                                   0u,
                                   0u};
     }
-    sbMaterials_ = ctx.createBuffer({.usage = lvk::BufferUsageBits_Storage,
-                                     .storage = lvk::StorageType_HostVisible,
-                                     .size = sizeof(GpuMaterial) * std::max<size_t>(materials_.size(), 1),
-                                     .data = materials_.data(),
-                                     .debugName = "materials"});
+    for (uint32_t i = 0; i < kRing; ++i)
+      sbMaterials_[i] = ctx.createBuffer({.usage = lvk::BufferUsageBits_Storage,
+                                          .storage = lvk::StorageType_HostVisible,
+                                          .size = sizeof(GpuMaterial) * std::max<size_t>(materials_.size(), 1),
+                                          .data = materials_.data(),
+                                          .debugName = "materials"});
     vb0_ = ctx.createBuffer({.usage = lvk::BufferUsageBits_Storage,
                              .storage = lvk::StorageType_Device,
                              .size = sizeof(VertexData) * vertexData_.size(),
@@ -869,7 +873,6 @@ class Bistro final : public lvk::metal::ISample {
 
   void loadMaterials() {
     stbi_set_flip_vertically_on_load(1);
-    textures_.resize(cachedMaterials_.size());
     remainingMaterials_ = uint32_t(cachedMaterials_.size());
     const std::string prefix = contentDir() + "src/bistro/Exterior/";
     for (size_t i = 0; i < cachedMaterials_.size(); ++i) {
@@ -945,7 +948,6 @@ class Bistro final : public lvk::metal::ISample {
       ownedPixels_.push_back(mtl.alpha);
       remainingMaterials_.fetch_sub(1u, std::memory_order_release);
     }
-    std::memcpy(ctx_->getMappedPtr(sbMaterials_), materials_.data(), sizeof(GpuMaterial) * materials_.size());
   }
 
   static void keyCallback(GLFWwindow* window, int key, int, int action, int) {
@@ -1032,7 +1034,6 @@ class Bistro final : public lvk::metal::ISample {
   std::vector<uint32_t> indexData_;
   std::vector<CachedMaterial> cachedMaterials_;
   std::vector<GpuMaterial> materials_;
-  std::vector<lvk::TextureHandle> textures_;
 
   std::unique_ptr<tf::Executor> loaderPool_ = std::make_unique<tf::Executor>(std::max(2u, std::thread::hardware_concurrency() / 2));
   std::mutex loadedMutex_;
@@ -1050,7 +1051,8 @@ class Bistro final : public lvk::metal::ISample {
   lvk::Holder<lvk::SamplerHandle> sampler_, samplerShadow_;
   lvk::Holder<lvk::TextureHandle> textureDummyWhite_, shadowMap_, offscreenColor_, offscreenColorMSAA_, offscreenDepth_, skyboxRadiance_,
       skyboxIrradiance_;
-  lvk::Holder<lvk::BufferHandle> vb0_, ib0_, sbMaterials_;
+  lvk::Holder<lvk::BufferHandle> vb0_, ib0_;
+  lvk::Holder<lvk::BufferHandle> sbMaterials_[kRing];
   lvk::Holder<lvk::BufferHandle> ubPerFrame_[kRing], ubPerFrameShadow_[kRing], ubPerObject_[kRing];
   uint64_t vbAddress_ = 0;
 

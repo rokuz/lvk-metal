@@ -2,6 +2,7 @@ import lvk_metal_bindless;
 
 struct PC {
   uint texture;
+  uint sampler;
 };
 
 [[vk::push_constant]] PC pc;
@@ -21,5 +22,5 @@ V2F fullscreenVertexMain(uint vid : SV_VertexID) {
 
 [shader("fragment")]
 float4 fullscreenFragmentMain(V2F input) : SV_Target {
-  return textureBindless2D(pc.texture, 0, input.uv);
+  return textureBindless2D(pc.texture, pc.sampler, input.uv);
 }
