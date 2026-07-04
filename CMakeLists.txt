@@ -12,7 +12,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(LVK_METAL_WITH_SAMPLES "Build sample apps" ON)
 option(LVK_METAL_WITH_SAMPLES_SLANG "Use Slang (compiled to MSL at runtime) for sample shaders" OFF)
-option(LVK_METAL_DISABLE_GPU_COUNTERS "Skip GPU timestamp counter-heap writes/resolves (needed for Metal GPU capture)" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(LvkMetalSanitizers)

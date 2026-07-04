@@ -136,6 +136,7 @@ bool MetalContext::initialize(CA::MetalLayer* layer, uint32_t width, uint32_t he
   buffersCapacity_ = cfg.initialBuffersPoolSize ? cfg.initialBuffersPoolSize : 1;
   pushConstantsSize_ = cfg.pushConstantsSize;
   pushConstantsShadow_.assign(pushConstantsSize_, 0);
+  gpuCounters_ = cfg.gpuCounters;
   pushesPerFrameCapacity_ = cfg.initialPushConstantsPerFrameCount ? cfg.initialPushConstantsPerFrameCount : 1;
 
   if (!createDevice())
@@ -1618,8 +1619,11 @@ Result MetalContext::download(TensorHandle handle, void* data, size_t size) {
   return Result();
 }
 
-static bool bindTensorsToArgTable(
-    const MetalContext* ctx, MTL4::ArgumentTable* table, const TensorHandle* tensors, uint32_t count, uint32_t baseIndex) {
+static bool bindTensorsToArgTable(const MetalContext* ctx,
+                                  MTL4::ArgumentTable* table,
+                                  const TensorHandle* tensors,
+                                  uint32_t count,
+                                  uint32_t baseIndex) {
   for (uint32_t i = 0; i < count; ++i) {
     const MetalTensor* mt = ctx->getTensor(tensors[i]);
     if (!mt || !mt->tensor)
@@ -3086,15 +3090,15 @@ void CommandBuffer::cmdWriteTimestamp(QueryPoolHandle pool, uint32_t query) {
   MTL4::CounterHeap* heap = ctx_->getQueryHeap(pool);
   if (!heap)
     return;
-#ifndef LVK_METAL_DISABLE_GPU_COUNTERS
-  if (encoder_) {
-    encoder_->writeTimestamp(MTL4::TimestampGranularityPrecise, MTL::RenderStageFragment, heap, query);
-  } else {
-    endComputeEncoder();
-    if (MTL4::CommandBuffer* cb = wrapper_->cmdBuf.get())
-      cb->writeTimestampIntoHeap(heap, query);
+  if (ctx_->gpuCounters()) {
+    if (encoder_) {
+      encoder_->writeTimestamp(MTL4::TimestampGranularityPrecise, MTL::RenderStageFragment, heap, query);
+    } else {
+      endComputeEncoder();
+      if (MTL4::CommandBuffer* cb = wrapper_->cmdBuf.get())
+        cb->writeTimestampIntoHeap(heap, query);
+    }
   }
-#endif
 
   for (TimestampSpan& s : timestampSpans_) {
     if (s.pool == pool) {
@@ -3110,20 +3114,20 @@ void CommandBuffer::resolveTimestamps() {
   MTL4::CommandBuffer* cb = wrapper_ ? wrapper_->cmdBuf.get() : nullptr;
   if (!cb)
     return;
-#ifndef LVK_METAL_DISABLE_GPU_COUNTERS
-  for (const TimestampSpan& s : timestampSpans_) {
-    const MetalQueryPool* qp = ctx_->getQueryPool(s.pool);
-    if (!qp || !qp->heap || !qp->resolved)
-      continue;
-    const uint32_t count = s.hi - s.lo + 1;
-    cb->resolveCounterHeap(
-        qp->heap.get(),
-        NS::Range(s.lo, count),
-        MTL4::BufferRange(qp->resolved->gpuAddress() + uint64_t(s.lo) * sizeof(uint64_t), uint64_t(count) * sizeof(uint64_t)),
-        nullptr,
-        nullptr);
+  if (ctx_->gpuCounters()) {
+    for (const TimestampSpan& s : timestampSpans_) {
+      const MetalQueryPool* qp = ctx_->getQueryPool(s.pool);
+      if (!qp || !qp->heap || !qp->resolved)
+        continue;
+      const uint32_t count = s.hi - s.lo + 1;
+      cb->resolveCounterHeap(
+          qp->heap.get(),
+          NS::Range(s.lo, count),
+          MTL4::BufferRange(qp->resolved->gpuAddress() + uint64_t(s.lo) * sizeof(uint64_t), uint64_t(count) * sizeof(uint64_t)),
+          nullptr,
+          nullptr);
+    }
   }
-#endif
   timestampSpans_.clear();
 }
 

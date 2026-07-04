@@ -49,6 +49,7 @@ struct ContextConfig {
   bool gammaCorrection = false;
   bool headless = false;
   bool validation = false;
+  bool gpuCounters = true;
 };
 
 enum class ArgumentKind : uint8_t {

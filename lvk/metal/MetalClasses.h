@@ -346,6 +346,9 @@ class MetalContext : public IMetalContext {
   uint32_t pushConstantsSize() const {
     return pushConstantsSize_;
   }
+  bool gpuCounters() const {
+    return gpuCounters_;
+  }
   uint8_t* pushConstantsShadow() {
     return pushConstantsShadow_.data();
   }
@@ -587,6 +590,7 @@ class MetalContext : public IMetalContext {
 
   NS::SharedPtr<MTL::Buffer> constantsRing_;
   uint32_t pushConstantsSize_ = 128;
+  bool gpuCounters_ = true;
   uint32_t pushesPerFrameCapacity_ = 256;
   uint32_t constantsFrameRegionBytes_ = 0;
   uint32_t constantsCursor_ = 0;
