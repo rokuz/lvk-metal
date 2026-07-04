@@ -2505,9 +2505,13 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
     rpd->setRenderTargetArrayLength(viewCount);
 
   encoder_ = wrapper_->cmdBuf.get()->renderCommandEncoder(rpd.get());
+  depthState_ = {};
+  frontStencil_ = {};
+  backStencil_ = {};
   depthStencilDirty_ = true;
   lastDepthStencilState_ = nullptr;
   depthBiasEnabled_ = false;
+  stencilRef_ = 0;
   encoder_->setStencilReferenceValue(stencilRef_);
 
   if (multiview) {
