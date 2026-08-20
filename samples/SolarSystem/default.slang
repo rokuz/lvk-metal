@@ -1,3 +1,4 @@
+import glsl;
 import lvk_metal_bindless;
 
 struct Vertex {
