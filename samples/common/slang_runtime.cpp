@@ -27,6 +27,10 @@ SlangRuntime::SlangRuntime(std::filesystem::path moduleDir) noexcept {
     return;
   }
 
+  if (SLANG_FAILED(impl->globalSession->compileBuiltinModule(slang::BuiltinModuleName::GLSL, 0))) {
+    LLOGW("Slang: failed to compile the built-in GLSL module");
+  }
+
   slang::TargetDesc target = {};
   target.structureSize = sizeof(slang::TargetDesc);
   target.format = SLANG_METAL;
