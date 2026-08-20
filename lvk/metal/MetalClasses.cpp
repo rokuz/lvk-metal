@@ -554,7 +554,9 @@ IMetalCommandBuffer& MetalContext::acquireMetalCommandBuffer(bool) {
   return *cmd;
 }
 
-SubmitHandle MetalContext::submit(lvk::ICommandBuffer& commandBuffer, TextureHandle present) {
+SubmitHandle MetalContext::submit(lvk::ICommandBuffer& commandBuffer,
+                                  TextureHandle present,
+                                  const ldr::Span<TextureHandle>&) {
   CommandBuffer& cmd = static_cast<CommandBuffer&>(commandBuffer);
   LVK_ASSERT(cmd.wrapper_);
 

@@ -179,8 +179,6 @@ class CommandBuffer : public IMetalCommandBuffer {
                                      uint32_t stride = 0) override {}
   // ---------------------------------------
 
-  void cmdReleaseToAsyncCompute(const ldr::Span<TextureHandle>& textures) const override {}
-
   void cmdPushDebugGroupLabel(const char* label, uint32_t colorRGBA = 0xffffffff) const override;
   void cmdInsertDebugEventLabel(const char* label, uint32_t colorRGBA = 0xffffffff) const override;
   void cmdPopDebugGroupLabel() const override;
@@ -370,7 +368,9 @@ class MetalContext : public IMetalContext {
   [[nodiscard]] bool initialize(CA::MetalLayer* layer, uint32_t width, uint32_t height, const ContextConfig& cfg);
 
   IMetalCommandBuffer& acquireMetalCommandBuffer(bool dedicatedCompute = false) override;
-  SubmitHandle submit(lvk::ICommandBuffer& commandBuffer, TextureHandle present = {}) override;
+  SubmitHandle submit(lvk::ICommandBuffer& commandBuffer,
+                      TextureHandle present = {},
+                      const ldr::Span<TextureHandle>& release = {}) override;
   void wait(SubmitHandle handle) override;
 
   Holder<BufferHandle> createBuffer(const BufferDesc& desc, const char* debugName = nullptr, Result* outResult = nullptr) override;
