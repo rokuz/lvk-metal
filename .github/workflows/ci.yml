@@ -34,10 +34,10 @@ jobs:
 
       - name: Install KosmicKrisp # LVK requirement
         run: |
-          KK="$HOME/.cache/kosmickrisp/mesa-26.1.2"
+          KK="$HOME/.cache/kosmickrisp/mesa-26.2.1"
           if [ ! -f "$KK/lib/libvulkan.dylib" ]; then
             mkdir -p "$KK"
-            curl -fsSL -o "$KK.zip" "https://github.com/rokuz/kosmickrisp-binaries/releases/download/mesa-mesa-26.1.2/kosmickrisp-macos-arm64.zip"
+            curl -fsSL -o "$KK.zip" "https://github.com/rokuz/kosmickrisp-binaries/releases/download/mesa-mesa-26.2.1/kosmickrisp-macos-arm64.zip"
             unzip -q -o "$KK.zip" -d "$KK"
           fi
           echo "KK_INCLUDE=$KK/deps/vulkan-headers/include" >> "$GITHUB_ENV"

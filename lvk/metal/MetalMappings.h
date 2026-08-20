@@ -87,10 +87,18 @@ inline MTL::PixelFormat toMTLPixelFormat(Format format) {
   switch (format) {
   case Format_R_UN8:
     return MTL::PixelFormatR8Unorm;
+  case Format_R_UI8:
+    return MTL::PixelFormatR8Uint;
+  case Format_R_I8:
+    return MTL::PixelFormatR8Sint;
   case Format_R_UI16:
     return MTL::PixelFormatR16Uint;
+  case Format_R_I16:
+    return MTL::PixelFormatR16Sint;
   case Format_R_UI32:
     return MTL::PixelFormatR32Uint;
+  case Format_R_I32:
+    return MTL::PixelFormatR32Sint;
   case Format_R_UN16:
     return MTL::PixelFormatR16Unorm;
   case Format_R_F16:
@@ -101,10 +109,18 @@ inline MTL::PixelFormat toMTLPixelFormat(Format format) {
     return MTL::PixelFormatA8Unorm;
   case Format_RG_UN8:
     return MTL::PixelFormatRG8Unorm;
+  case Format_RG_UI8:
+    return MTL::PixelFormatRG8Uint;
+  case Format_RG_I8:
+    return MTL::PixelFormatRG8Sint;
   case Format_RG_UI16:
     return MTL::PixelFormatRG16Uint;
+  case Format_RG_I16:
+    return MTL::PixelFormatRG16Sint;
   case Format_RG_UI32:
     return MTL::PixelFormatRG32Uint;
+  case Format_RG_I32:
+    return MTL::PixelFormatRG32Sint;
   case Format_RG_UN16:
     return MTL::PixelFormatRG16Unorm;
   case Format_RG_F16:
@@ -113,8 +129,18 @@ inline MTL::PixelFormat toMTLPixelFormat(Format format) {
     return MTL::PixelFormatRG32Float;
   case Format_RGBA_UN8:
     return MTL::PixelFormatRGBA8Unorm;
+  case Format_RGBA_UI8:
+    return MTL::PixelFormatRGBA8Uint;
+  case Format_RGBA_I8:
+    return MTL::PixelFormatRGBA8Sint;
+  case Format_RGBA_UI16:
+    return MTL::PixelFormatRGBA16Uint;
+  case Format_RGBA_I16:
+    return MTL::PixelFormatRGBA16Sint;
   case Format_RGBA_UI32:
     return MTL::PixelFormatRGBA32Uint;
+  case Format_RGBA_I32:
+    return MTL::PixelFormatRGBA32Sint;
   case Format_RGBA_F16:
     return MTL::PixelFormatRGBA16Float;
   case Format_RGBA_F32:
@@ -127,6 +153,16 @@ inline MTL::PixelFormat toMTLPixelFormat(Format format) {
     return MTL::PixelFormatBGRA8Unorm_sRGB;
   case Format_A2B10G10R10_UN:
     return MTL::PixelFormatRGB10A2Unorm;
+  case Format_A2R10G10B10_UN:
+    return MTL::PixelFormatBGR10A2Unorm;
+  case Format_B10G11R11_UF:
+    return MTL::PixelFormatRG11B10Float;
+  case Format_E5B9G9R9_UF:
+    return MTL::PixelFormatRGB9E5Float;
+  case Format_ETC2_RGB8:
+    return MTL::PixelFormatETC2_RGB8;
+  case Format_ETC2_SRGB8:
+    return MTL::PixelFormatETC2_RGB8_sRGB;
   case Format_BC7_RGBA:
     return MTL::PixelFormatBC7_RGBAUnorm;
   case Format_BC7_SRGBA:
@@ -403,10 +439,18 @@ inline Format toLVKFormat(MTL::PixelFormat format) {
   switch (format) {
   case MTL::PixelFormatR8Unorm:
     return Format_R_UN8;
+  case MTL::PixelFormatR8Uint:
+    return Format_R_UI8;
+  case MTL::PixelFormatR8Sint:
+    return Format_R_I8;
   case MTL::PixelFormatR16Uint:
     return Format_R_UI16;
+  case MTL::PixelFormatR16Sint:
+    return Format_R_I16;
   case MTL::PixelFormatR32Uint:
     return Format_R_UI32;
+  case MTL::PixelFormatR32Sint:
+    return Format_R_I32;
   case MTL::PixelFormatR16Unorm:
     return Format_R_UN16;
   case MTL::PixelFormatR16Float:
@@ -417,10 +461,18 @@ inline Format toLVKFormat(MTL::PixelFormat format) {
     return Format_A_UN8;
   case MTL::PixelFormatRG8Unorm:
     return Format_RG_UN8;
+  case MTL::PixelFormatRG8Uint:
+    return Format_RG_UI8;
+  case MTL::PixelFormatRG8Sint:
+    return Format_RG_I8;
   case MTL::PixelFormatRG16Uint:
     return Format_RG_UI16;
+  case MTL::PixelFormatRG16Sint:
+    return Format_RG_I16;
   case MTL::PixelFormatRG32Uint:
     return Format_RG_UI32;
+  case MTL::PixelFormatRG32Sint:
+    return Format_RG_I32;
   case MTL::PixelFormatRG16Unorm:
     return Format_RG_UN16;
   case MTL::PixelFormatRG16Float:
@@ -429,8 +481,18 @@ inline Format toLVKFormat(MTL::PixelFormat format) {
     return Format_RG_F32;
   case MTL::PixelFormatRGBA8Unorm:
     return Format_RGBA_UN8;
+  case MTL::PixelFormatRGBA8Uint:
+    return Format_RGBA_UI8;
+  case MTL::PixelFormatRGBA8Sint:
+    return Format_RGBA_I8;
+  case MTL::PixelFormatRGBA16Uint:
+    return Format_RGBA_UI16;
+  case MTL::PixelFormatRGBA16Sint:
+    return Format_RGBA_I16;
   case MTL::PixelFormatRGBA32Uint:
     return Format_RGBA_UI32;
+  case MTL::PixelFormatRGBA32Sint:
+    return Format_RGBA_I32;
   case MTL::PixelFormatRGBA16Float:
     return Format_RGBA_F16;
   case MTL::PixelFormatRGBA32Float:
@@ -443,6 +505,16 @@ inline Format toLVKFormat(MTL::PixelFormat format) {
     return Format_BGRA_SRGB8;
   case MTL::PixelFormatRGB10A2Unorm:
     return Format_A2B10G10R10_UN;
+  case MTL::PixelFormatBGR10A2Unorm:
+    return Format_A2R10G10B10_UN;
+  case MTL::PixelFormatRG11B10Float:
+    return Format_B10G11R11_UF;
+  case MTL::PixelFormatRGB9E5Float:
+    return Format_E5B9G9R9_UF;
+  case MTL::PixelFormatETC2_RGB8:
+    return Format_ETC2_RGB8;
+  case MTL::PixelFormatETC2_RGB8_sRGB:
+    return Format_ETC2_SRGB8;
   case MTL::PixelFormatBC7_RGBAUnorm:
     return Format_BC7_RGBA;
   case MTL::PixelFormatBC7_RGBAUnorm_sRGB:
