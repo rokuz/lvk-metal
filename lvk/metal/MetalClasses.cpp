@@ -77,6 +77,18 @@ MTL::MultisampleDepthResolveFilter toMTLDepthResolveFilter(lvk::ResolveMode mode
   }
 }
 
+bool formatHasDepth(MTL::PixelFormat f) {
+  switch (f) {
+  case MTL::PixelFormatDepth16Unorm:
+  case MTL::PixelFormatDepth32Float:
+  case MTL::PixelFormatDepth24Unorm_Stencil8:
+  case MTL::PixelFormatDepth32Float_Stencil8:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool formatHasStencil(MTL::PixelFormat f) {
   switch (f) {
   case MTL::PixelFormatStencil8:
@@ -1866,6 +1878,7 @@ static NS::SharedPtr<MTL4::PrimitiveAccelerationStructureDescriptor> makeTriangl
   NS::SharedPtr<MTL4::PrimitiveAccelerationStructureDescriptor> prim = ns::make<MTL4::PrimitiveAccelerationStructureDescriptor>();
   const NS::Object* geoms[] = {geom.get()};
   prim->setGeometryDescriptors(NS::Array::array(geoms, 1));
+  prim->setUsage(toMTLAccelStructUsage(desc.buildFlags));
   return prim;
 }
 
@@ -1949,6 +1962,8 @@ Holder<AccelStructHandle> MetalContext::createAccelerationStructure(const AccelS
     blasDesc = makeTriangleBlasDescriptor(
         desc, vb->buffer->gpuAddress(), ib && ib->buffer ? ib->buffer->gpuAddress() : 0, xf && xf->buffer ? xf->buffer->gpuAddress() : 0);
     asDesc = blasDesc.get();
+    as.blasDescriptor = blasDesc;
+    as.allowUpdate = (desc.buildFlags & AccelStructBuildFlagBits_AllowUpdate) != 0;
   } else if (desc.type == AccelStructType_TLAS) {
     as.numInstances = desc.buildRange.primitiveCount;
     as.indirectTLAS = desc.instancesBuffer.empty();
@@ -1965,6 +1980,7 @@ Holder<AccelStructHandle> MetalContext::createAccelerationStructure(const AccelS
                          static_cast<MTL::IndirectAccelerationStructureInstanceDescriptor*>(as.instanceDescriptors->contents()),
                          as.numInstances);
       tlasDesc = makeInstanceTlasDescriptor(as.instanceDescriptors->gpuAddress(), as.numInstances);
+      tlasDesc->setUsage(toMTLAccelStructUsage(desc.buildFlags));
       as.tlasDescriptor = tlasDesc;
       asDesc = tlasDesc.get();
     }
@@ -1988,7 +2004,9 @@ Holder<AccelStructHandle> MetalContext::createAccelerationStructure(const AccelS
   ns::setLabel(as.accel.get(), desc.debugName);
   addResident(as.accel.get());
 
-  as.scratch = NS::TransferPtr(device_->newBuffer(std::max<uint64_t>(sizes.buildScratchBufferSize, 16), MTL::ResourceStorageModePrivate));
+  const uint64_t scratchSize =
+      as.allowUpdate ? std::max(sizes.buildScratchBufferSize, sizes.refitScratchBufferSize) : sizes.buildScratchBufferSize;
+  as.scratch = NS::TransferPtr(device_->newBuffer(std::max<uint64_t>(scratchSize, 16), MTL::ResourceStorageModePrivate));
   ns::setLabel(as.scratch.get(), "lvk-metal.accelstruct.scratch");
   addResident(as.scratch.get());
 
@@ -2030,6 +2048,29 @@ AccelStructSizes MetalContext::getAccelStructSizes(const AccelStructDesc& desc, 
       .updateScratchSize = sizes.refitScratchBufferSize,
       .buildScratchSize = sizes.buildScratchBufferSize,
   };
+}
+
+bool MetalContext::supportsTextureFormat(Format format) const {
+  if (format == Format_Invalid)
+    return false;
+  if (isYUVFormat(format))
+    return true;
+
+  switch (toMTLPixelFormat(format)) {
+  case MTL::PixelFormatInvalid:
+    return false;
+  case MTL::PixelFormatBC1_RGBA:
+  case MTL::PixelFormatBC1_RGBA_sRGB:
+  case MTL::PixelFormatBC3_RGBA:
+  case MTL::PixelFormatBC3_RGBA_sRGB:
+  case MTL::PixelFormatBC4_RUnorm:
+  case MTL::PixelFormatBC5_RGUnorm:
+  case MTL::PixelFormatBC7_RGBAUnorm:
+  case MTL::PixelFormatBC7_RGBAUnorm_sRGB:
+    return device_->supportsBCTextureCompression();
+  default:
+    return true;
+  }
 }
 
 uint32_t MetalContext::indirectTLASInstanceDescriptorSize() const {
@@ -2470,19 +2511,22 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
     LVK_ASSERT(img && img->texture);
     const bool resolve = !framebuffer.depthStencil.resolveTexture.empty();
     const MetalImage* resolveImg = resolve ? ctx_->getImage(framebuffer.depthStencil.resolveTexture) : nullptr;
-    MTL::RenderPassDepthAttachmentDescriptor* att = rpd->depthAttachment();
-    att->setTexture(img->texture.get());
-    if (!multiview)
-      att->setSlice(renderPass.depth.layer);
-    att->setLevel(renderPass.depth.level);
-    att->setLoadAction(toLoadAction(renderPass.depth.loadOp));
-    if (resolve) {
-      LVK_ASSERT(resolveImg && resolveImg->texture);
-      att->setResolveTexture(resolveImg->texture.get());
-      att->setDepthResolveFilter(toMTLDepthResolveFilter(renderPass.depth.resolveMode));
+    LVK_ASSERT_MSG(formatHasDepth(img->format) || formatHasStencil(img->format), "Invalid depth attachment format");
+    if (formatHasDepth(img->format)) {
+      MTL::RenderPassDepthAttachmentDescriptor* att = rpd->depthAttachment();
+      att->setTexture(img->texture.get());
+      if (!multiview)
+        att->setSlice(renderPass.depth.layer);
+      att->setLevel(renderPass.depth.level);
+      att->setLoadAction(toLoadAction(renderPass.depth.loadOp));
+      if (resolve) {
+        LVK_ASSERT(resolveImg && resolveImg->texture);
+        att->setResolveTexture(resolveImg->texture.get());
+        att->setDepthResolveFilter(toMTLDepthResolveFilter(renderPass.depth.resolveMode));
+      }
+      att->setStoreAction(toStoreAction(renderPass.depth.storeOp, resolve));
+      att->setClearDepth(renderPass.depth.clearDepth);
     }
-    att->setStoreAction(toStoreAction(renderPass.depth.storeOp, resolve));
-    att->setClearDepth(renderPass.depth.clearDepth);
     if (formatHasStencil(img->format)) {
       MTL::RenderPassStencilAttachmentDescriptor* satt = rpd->stencilAttachment();
       satt->setTexture(img->texture.get());
@@ -2499,6 +2543,12 @@ void CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass,
     }
     rtWidth = img->width;
     rtHeight = img->height;
+  }
+
+  if (!rtWidth && !rtHeight) {
+    rtWidth = std::max(renderPass.attachmentlessWidth, 1u);
+    rtHeight = std::max(renderPass.attachmentlessHeight, 1u);
+    rpd->setDefaultRasterSampleCount(1);
   }
 
   rpd->setRenderTargetWidth(rtWidth);
@@ -2744,6 +2794,37 @@ void CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instanc
   enc->barrierAfterStages(
       MTL::StageAccelerationStructure, MTL::StageDispatch | MTL::StageVertex | MTL::StageFragment, MTL4::VisibilityOptionDevice);
   enc->endEncoding();
+}
+
+void CommandBuffer::cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) {
+  if (handles.empty())
+    return;
+
+  MTL4::ComputeCommandEncoder* enc = nullptr;
+  for (AccelStructHandle handle : handles) {
+    const MetalAccelStruct* as = ctx_->getAccelStruct(handle);
+    LVK_ASSERT(as && as->accel && as->type == AccelStructType_BLAS);
+    LVK_ASSERT_MSG(!as || as->allowUpdate, "BLAS must be built with AccelStructBuildFlagBits_AllowUpdate to be refit");
+    if (!as || !as->accel || as->type != AccelStructType_BLAS || !as->blasDescriptor || !as->allowUpdate)
+      continue;
+    if (!enc) {
+      enc = beginTransferEncoder();
+      enc->barrierAfterQueueStages(MTL::StageBlit | MTL::StageDispatch | MTL::StageVertex | MTL::StageFragment |
+                                       MTL::StageAccelerationStructure,
+                                   MTL::StageAccelerationStructure,
+                                   MTL4::VisibilityOptionDevice);
+    }
+    enc->refitAccelerationStructure(as->accel.get(),
+                                    as->blasDescriptor.get(),
+                                    as->accel.get(),
+                                    MTL4::BufferRange(as->scratch->gpuAddress(), as->scratch->length()));
+  }
+
+  if (enc) {
+    enc->barrierAfterStages(
+        MTL::StageAccelerationStructure, MTL::StageDispatch | MTL::StageVertex | MTL::StageFragment, MTL4::VisibilityOptionDevice);
+    enc->endEncoding();
+  }
 }
 
 void CommandBuffer::cmdBuildIndirectTLAS(lvk::AccelStructHandle tlas,
@@ -3312,6 +3393,19 @@ void MetalValidatedCommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, Buffer
     }
   }
   CommandBuffer::cmdUpdateTLAS(handle, instancesBuffer);
+}
+
+void MetalValidatedCommandBuffer::cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) {
+  for (AccelStructHandle handle : handles) {
+    const MetalAccelStruct* as = context()->getAccelStruct(handle);
+    if (!as || as->type != AccelStructType_BLAS) {
+      LLOGW("validation: cmdUpdateBLAS requires bottom-level acceleration structures");
+      continue;
+    }
+    if (!as->allowUpdate)
+      LLOGW("validation: cmdUpdateBLAS requires a BLAS created with AccelStructBuildFlagBits_AllowUpdate");
+  }
+  CommandBuffer::cmdUpdateBLAS(handles);
 }
 
 IMetalCommandBuffer& MetalValidatedContext::acquireMetalCommandBuffer(bool) {

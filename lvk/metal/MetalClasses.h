@@ -45,10 +45,12 @@ struct MetalAccelStruct {
   NS::SharedPtr<MTL::Buffer> scratch;
   NS::SharedPtr<MTL::Buffer> instanceDescriptors;
   NS::SharedPtr<MTL4::InstanceAccelerationStructureDescriptor> tlasDescriptor;
+  NS::SharedPtr<MTL4::PrimitiveAccelerationStructureDescriptor> blasDescriptor;
   AccelStructType type = AccelStructType_Invalid;
   uint32_t numInstances = 0;
   uint64_t buildScratchSize = 0;
   bool indirectTLAS = false;
+  bool allowUpdate = false;
 };
 
 struct MetalSampler {
@@ -242,6 +244,7 @@ class CommandBuffer : public IMetalCommandBuffer {
                     const TextureLayers& dstLayers = {}) override;
   void cmdGenerateMipmap(TextureHandle handle) override;
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
+  void cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) override;
   void cmdBuildIndirectTLAS(lvk::AccelStructHandle tlas,
                             lvk::BufferHandle instanceDescriptors,
                             uint32_t instanceCount,
@@ -448,6 +451,10 @@ class MetalContext : public IMetalContext {
 
   bool supportsAsyncCompute() const override {
     return false;
+  }
+  bool supportsTextureFormat(Format format) const override;
+  bool supportsShaderInterlock() const override {
+    return device_->rasterOrderGroupsSupported();
   }
 
   double getTimestampPeriodToMs() const override {
@@ -663,6 +670,7 @@ class MetalValidatedCommandBuffer final : public CommandBuffer {
                             uint32_t instanceCount,
                             lvk::BufferHandle instanceCountBuffer = {}) override;
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
+  void cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) override;
 };
 
 class MetalValidatedContext final : public MetalContext {

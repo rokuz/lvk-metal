@@ -163,10 +163,34 @@ inline MTL::PixelFormat toMTLPixelFormat(Format format) {
     return MTL::PixelFormatETC2_RGB8;
   case Format_ETC2_SRGB8:
     return MTL::PixelFormatETC2_RGB8_sRGB;
+  case Format_BC1_RGBA:
+    return MTL::PixelFormatBC1_RGBA;
+  case Format_BC1_SRGBA:
+    return MTL::PixelFormatBC1_RGBA_sRGB;
+  case Format_BC3_RGBA:
+    return MTL::PixelFormatBC3_RGBA;
+  case Format_BC3_SRGBA:
+    return MTL::PixelFormatBC3_RGBA_sRGB;
+  case Format_BC4_R:
+    return MTL::PixelFormatBC4_RUnorm;
+  case Format_BC5_RG:
+    return MTL::PixelFormatBC5_RGUnorm;
   case Format_BC7_RGBA:
     return MTL::PixelFormatBC7_RGBAUnorm;
   case Format_BC7_SRGBA:
     return MTL::PixelFormatBC7_RGBAUnorm_sRGB;
+  case Format_ASTC_4x4:
+    return MTL::PixelFormatASTC_4x4_LDR;
+  case Format_ASTC_4x4_SRGB:
+    return MTL::PixelFormatASTC_4x4_sRGB;
+  case Format_ASTC_5x5:
+    return MTL::PixelFormatASTC_5x5_LDR;
+  case Format_ASTC_5x5_SRGB:
+    return MTL::PixelFormatASTC_5x5_sRGB;
+  case Format_ASTC_6x6:
+    return MTL::PixelFormatASTC_6x6_LDR;
+  case Format_ASTC_6x6_SRGB:
+    return MTL::PixelFormatASTC_6x6_sRGB;
   case Format_Z_UN16:
     return MTL::PixelFormatDepth16Unorm;
   case Format_Z_F32:
@@ -174,6 +198,8 @@ inline MTL::PixelFormat toMTLPixelFormat(Format format) {
   case Format_Z_UN24_S_UI8:
   case Format_Z_F32_S_UI8:
     return MTL::PixelFormatDepth32Float_Stencil8;
+  case Format_S_UI8:
+    return MTL::PixelFormatStencil8;
   default:
     return MTL::PixelFormatInvalid;
   }
@@ -405,6 +431,19 @@ inline MTL::IndexType toMTLIndexType(IndexFormat format) {
   return format == IndexFormat_UI16 ? MTL::IndexTypeUInt16 : MTL::IndexTypeUInt32;
 }
 
+inline MTL::AccelerationStructureUsage toMTLAccelStructUsage(uint8_t buildFlags) {
+  MTL::AccelerationStructureUsage usage = MTL::AccelerationStructureUsageNone;
+  if (buildFlags & AccelStructBuildFlagBits_AllowUpdate)
+    usage |= MTL::AccelerationStructureUsageRefit;
+  if (buildFlags & AccelStructBuildFlagBits_PreferFastBuild)
+    usage |= MTL::AccelerationStructureUsagePreferFastBuild;
+  if (buildFlags & AccelStructBuildFlagBits_PreferFastTrace)
+    usage |= MTL::AccelerationStructureUsagePreferFastIntersection;
+  if (buildFlags & AccelStructBuildFlagBits_LowMemory)
+    usage |= MTL::AccelerationStructureUsageMinimizeMemory;
+  return usage;
+}
+
 inline bool isYUVFormat(Format format) {
   return format == Format_YUV_NV12 || format == Format_YUV_420p;
 }
@@ -515,10 +554,34 @@ inline Format toLVKFormat(MTL::PixelFormat format) {
     return Format_ETC2_RGB8;
   case MTL::PixelFormatETC2_RGB8_sRGB:
     return Format_ETC2_SRGB8;
+  case MTL::PixelFormatBC1_RGBA:
+    return Format_BC1_RGBA;
+  case MTL::PixelFormatBC1_RGBA_sRGB:
+    return Format_BC1_SRGBA;
+  case MTL::PixelFormatBC3_RGBA:
+    return Format_BC3_RGBA;
+  case MTL::PixelFormatBC3_RGBA_sRGB:
+    return Format_BC3_SRGBA;
+  case MTL::PixelFormatBC4_RUnorm:
+    return Format_BC4_R;
+  case MTL::PixelFormatBC5_RGUnorm:
+    return Format_BC5_RG;
   case MTL::PixelFormatBC7_RGBAUnorm:
     return Format_BC7_RGBA;
   case MTL::PixelFormatBC7_RGBAUnorm_sRGB:
     return Format_BC7_SRGBA;
+  case MTL::PixelFormatASTC_4x4_LDR:
+    return Format_ASTC_4x4;
+  case MTL::PixelFormatASTC_4x4_sRGB:
+    return Format_ASTC_4x4_SRGB;
+  case MTL::PixelFormatASTC_5x5_LDR:
+    return Format_ASTC_5x5;
+  case MTL::PixelFormatASTC_5x5_sRGB:
+    return Format_ASTC_5x5_SRGB;
+  case MTL::PixelFormatASTC_6x6_LDR:
+    return Format_ASTC_6x6;
+  case MTL::PixelFormatASTC_6x6_sRGB:
+    return Format_ASTC_6x6_SRGB;
   case MTL::PixelFormatDepth16Unorm:
     return Format_Z_UN16;
   case MTL::PixelFormatDepth32Float:
@@ -527,6 +590,8 @@ inline Format toLVKFormat(MTL::PixelFormat format) {
     return Format_Z_UN24_S_UI8;
   case MTL::PixelFormatDepth32Float_Stencil8:
     return Format_Z_F32_S_UI8;
+  case MTL::PixelFormatStencil8:
+    return Format_S_UI8;
   default:
     return Format_Invalid;
   }

@@ -4,7 +4,7 @@
     "source": {
       "type": "git",
       "url": "https://github.com/rokuz/lightweightvk.git",
-      "revision": "1bda6bfd87247c7cb128de9776187cec568aabb0",
+      "revision": "origin/ng2",
       "recursive": false
     },
     "postprocess": {
